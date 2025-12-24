@@ -1,0 +1,29 @@
+{
+  "name": "strapi-plugin-ai-translate",
+  "version": "0.0.1",
+  "description": "AI Translation plugin for Strapi",
+  "strapi": {
+    "name": "ai-translate",
+    "description": "Translate content using AI",
+    "kind": "plugin",
+    "displayName": "AI Translate"
+  },
+  "dependencies": {
+    "openai": "^6.15.0"
+  },
+  "peerDependencies": {
+    "@strapi/strapi": "^5.0.0",
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "react-router-dom": "^6.0.0",
+    "styled-components": "^6.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0 <=24.x.x",
+    "npm": ">=6.0.0"
+  },
+  "license": "MIT"
+}
