@@ -1,6 +1,6 @@
 {
   "name": "strapi-plugin-ai-translate",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "AI Translation plugin for Strapi v5",
   "keywords": [
     "strapi",

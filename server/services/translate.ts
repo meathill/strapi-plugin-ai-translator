@@ -6,6 +6,7 @@ import {
   collectTranslatableSegments,
   extractLocalizedTopLevelFields,
   isPlainObject,
+  stripComponentInstanceIds,
   type ComponentsDictionary,
   type Segment,
   type Schema,
@@ -374,7 +375,7 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
     });
 
     if (segments.length === 0) {
-      return localizedData;
+      return stripComponentInstanceIds(schema, components, localizedData);
     }
 
     const chunks = chunkSegments(segments, 50, 5000);
@@ -400,7 +401,8 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
         Object.assign(translationsById, result.translationsById);
       }
 
-      return applySegmentTranslations(localizedData, segments, translationsById);
+      const translated = applySegmentTranslations(localizedData, segments, translationsById);
+      return stripComponentInstanceIds(schema, components, translated);
     }
 
     const { replicate, model } = await createReplicateClient(pluginConfig);
@@ -421,6 +423,7 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
       Object.assign(translationsById, result.translationsById);
     }
 
-    return applySegmentTranslations(localizedData, segments, translationsById);
+    const translated = applySegmentTranslations(localizedData, segments, translationsById);
+    return stripComponentInstanceIds(schema, components, translated);
   },
 });

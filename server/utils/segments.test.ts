@@ -5,6 +5,7 @@ import {
   applySegmentTranslations,
   collectTranslatableSegments,
   extractLocalizedTopLevelFields,
+  stripComponentInstanceIds,
   type ComponentsDictionary,
   type Schema,
 } from './segments.ts';
@@ -152,3 +153,76 @@ test('applySegmentTranslations 能按 path 把翻译结果回填到原结构', (
     seo: { metaTitle: '元标题', metaDescription: 'Desc' },
   });
 });
+
+test('stripComponentInstanceIds 能移除组件实例 id，但保留 media/relation 的 id', () => {
+  const schema: Schema = {
+    pluginOptions: { i18n: { localized: true } },
+    attributes: {
+      seo: { type: 'component', component: 'shared.seo', pluginOptions: { i18n: { localized: true } } },
+      features: {
+        type: 'component',
+        component: 'features.feature-item',
+        repeatable: true,
+        pluginOptions: { i18n: { localized: true } },
+      },
+      blocks: {
+        type: 'dynamiczone',
+        components: ['features.feature-item'],
+        pluginOptions: { i18n: { localized: true } },
+      },
+    },
+  };
+
+  const components: ComponentsDictionary = {
+    'shared.seo': {
+      attributes: {
+        metaTitle: { type: 'string' },
+        shareImage: { type: 'media' },
+        nested: { type: 'component', component: 'shared.nested' },
+      },
+    },
+    'shared.nested': {
+      attributes: {
+        title: { type: 'string' },
+      },
+    },
+    'features.feature-item': {
+      attributes: {
+        title: { type: 'string' },
+        icon: { type: 'media' },
+      },
+    },
+  };
+
+  const localizedData = {
+    seo: {
+      id: 10,
+      createdAt: '2025-01-01T00:00:00.000Z',
+      updatedAt: '2025-01-02T00:00:00.000Z',
+      metaTitle: 'Hello',
+      shareImage: { id: 99 },
+      nested: { id: 11, createdAt: '2025-01-03T00:00:00.000Z', title: 'Nested' },
+    },
+    features: [
+      { id: 20, createdAt: '2025-01-01T00:00:00.000Z', title: 'A', icon: { id: 88 } },
+      { id: 21, updatedAt: '2025-01-02T00:00:00.000Z', title: 'B', icon: { id: 87 } },
+    ],
+    blocks: [{ id: 30, createdBy: { id: 1 }, __component: 'features.feature-item', title: 'Z', icon: { id: 77 } }],
+  };
+
+  const stripped = stripComponentInstanceIds(schema, components, localizedData);
+
+  assert.deepEqual(stripped, {
+    seo: {
+      metaTitle: 'Hello',
+      shareImage: { id: 99 },
+      nested: { title: 'Nested' },
+    },
+    features: [
+      { title: 'A', icon: { id: 88 } },
+      { title: 'B', icon: { id: 87 } },
+    ],
+    blocks: [{ __component: 'features.feature-item', title: 'Z', icon: { id: 77 } }],
+  });
+});
+

@@ -298,3 +298,101 @@ export function applySegmentTranslations<T extends Record<string, unknown>>(
 
   return result;
 }
+
+/**
+ * 把组件实例的 id 从数据中移除。
+ *
+ * 场景：当 target locale 是新建/空内容时，如果把 source locale 的组件（含 id）直接回填到表单，
+ * 保存时 Strapi 会报："Some of the provided components ... are not related to the entity"。
+ *
+ * 注意：只移除 component/dynamiczone 的组件实例 id，不会动 media/relation 的 id。
+ */
+export function stripComponentInstanceIds<T extends Record<string, unknown>>(
+  schema: Schema,
+  components: ComponentsDictionary,
+  localizedData: T
+): T {
+  const result = structuredClone(localizedData) as Record<string, unknown>;
+  const attributes = schema.attributes ?? {};
+
+  function stripComponentValue(componentSchema: Schema, value: unknown): unknown {
+    if (!isPlainObject(value)) {
+      return value;
+    }
+
+    const cloned = structuredClone(value) as Record<string, unknown>;
+    const keysToRemove = ['id', 'createdAt', 'updatedAt', 'publishedAt', 'createdBy', 'updatedBy'];
+    for (const key of keysToRemove) {
+      if (key in cloned) {
+        delete cloned[key];
+      }
+    }
+
+    const currentAttributes = componentSchema.attributes ?? {};
+    for (const [key, attribute] of Object.entries(currentAttributes)) {
+      cloned[key] = stripByAttribute(attribute, cloned[key]);
+    }
+
+    return cloned;
+  }
+
+  function stripByAttribute(attribute: Attribute, value: unknown): unknown {
+    if (value === null || value === undefined) {
+      return value;
+    }
+
+    switch (attribute.type) {
+      case 'component': {
+        const componentSchema = components[attribute.component];
+        if (!componentSchema?.attributes) {
+          return value;
+        }
+
+        if (attribute.repeatable) {
+          if (!Array.isArray(value)) {
+            return value;
+          }
+
+          return value.map((item) => stripComponentValue(componentSchema, item));
+        }
+
+        return stripComponentValue(componentSchema, value);
+      }
+      case 'dynamiczone': {
+        if (!Array.isArray(value)) {
+          return value;
+        }
+
+        return value.map((item) => {
+          if (!isPlainObject(item)) {
+            return item;
+          }
+
+          const componentUid = item.__component;
+          if (typeof componentUid !== 'string') {
+            return item;
+          }
+
+          const componentSchema = components[componentUid];
+          if (!componentSchema?.attributes) {
+            return item;
+          }
+
+          return stripComponentValue(componentSchema, item);
+        });
+      }
+      default:
+        return value;
+    }
+  }
+
+  for (const [key, attribute] of Object.entries(attributes)) {
+    if (!isAttributeLocalized(attribute)) {
+      continue;
+    }
+
+    result[key] = stripByAttribute(attribute, result[key]);
+  }
+
+  return result as T;
+}
