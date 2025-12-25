@@ -88,6 +88,27 @@ const AiTranslateSidePanel: SidePanelComponent = () => {
   };
 };
 
+async function importTranslationsForLocale(locale: string): Promise<TradOptions> {
+  try {
+    const { default: data } = await import(`./translations/${locale}.json`);
+    return data as TradOptions;
+  } catch {
+    // fallback
+  }
+
+  const baseLocale = locale.split('-')[0];
+  if (baseLocale && baseLocale !== locale) {
+    try {
+      const { default: data } = await import(`./translations/${baseLocale}.json`);
+      return data as TradOptions;
+    } catch {
+      // ignore
+    }
+  }
+
+  return {};
+}
+
 export default {
   register(app: unknown) {
     if (!isRecord(app) || typeof app.registerPlugin !== 'function') {
@@ -168,20 +189,12 @@ export default {
     const importedTrads = await Promise.all(
       locales
         .filter((locale): locale is string => typeof locale === 'string')
-        .map((locale) => {
-          return import(`./translations/${locale}.json`)
-            .then(({ default: data }) => {
-              return {
-                data: prefixPluginTranslations(data, pluginId),
-                locale,
-              };
-            })
-            .catch(() => {
-              return {
-                data: {},
-                locale,
-              };
-            });
+        .map(async (locale) => {
+          const data = await importTranslationsForLocale(locale);
+          return {
+            data: prefixPluginTranslations(data, pluginId),
+            locale,
+          };
         })
     );
 

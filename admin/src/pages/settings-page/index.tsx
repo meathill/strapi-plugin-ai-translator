@@ -1,26 +1,69 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Layouts, Page, useFetchClient, useNotification } from '@strapi/strapi/admin';
-import { Alert, Box, Button, Field, TextInput, Typography } from '@strapi/design-system';
+import {
+  Alert,
+  Box,
+  Button,
+  Field,
+  SingleSelect,
+  SingleSelectOption,
+  TextInput,
+  Typography,
+} from '@strapi/design-system';
+import { useIntl } from 'react-intl';
+import buyMeACoffeeQrCodePng from '../../../../qr-code.png';
+import getTrad from '../../utils/get-trad';
+
+type ValueSource = 'env' | 'settings' | 'config' | 'default';
+
+type Provider = 'openai' | 'replicate';
 
 type SettingsResponseData = {
   stored: {
-    apiUrl: string;
-    model: string;
-    apiKeyMasked: string;
-    apiKeySet: boolean;
+    provider: Provider;
+    openai: {
+      apiUrl: string;
+      model: string;
+      apiKeySet: boolean;
+      apiKeyLength: number;
+    };
+    replicate: {
+      model: string;
+      apiTokenSet: boolean;
+      apiTokenLength: number;
+    };
   };
   env: {
-    apiKeySet: boolean;
-    apiUrlSet: boolean;
-    modelSet: boolean;
+    providerSet: boolean;
+    openai: {
+      apiKeySet: boolean;
+      apiUrlSet: boolean;
+      modelSet: boolean;
+    };
+    replicate: {
+      apiTokenSet: boolean;
+      modelSet: boolean;
+    };
   };
   effective: {
-    apiUrl: string;
-    apiUrlSource: 'env' | 'settings' | 'config' | 'default';
-    model: string;
-    modelSource: 'env' | 'settings' | 'config' | 'default';
-    apiKeySet: boolean;
-    apiKeySource: 'env' | 'settings' | 'config' | 'default';
+    provider: Provider;
+    providerSource: ValueSource;
+    openai: {
+      apiUrl: string;
+      apiUrlSource: ValueSource;
+      model: string;
+      modelSource: ValueSource;
+      apiKeySet: boolean;
+      apiKeyLength: number;
+      apiKeySource: ValueSource;
+    };
+    replicate: {
+      model: string;
+      modelSource: ValueSource;
+      apiTokenSet: boolean;
+      apiTokenLength: number;
+      apiTokenSource: ValueSource;
+    };
   };
 };
 
@@ -32,46 +75,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
 }
 
-function getErrorMessage(err: unknown): string {
+function getApiErrorMessage(err: unknown): string | undefined {
   if (!isRecord(err)) {
-    return '请求失败';
+    return undefined;
   }
 
   const response = err.response;
   if (!isRecord(response)) {
-    return '请求失败';
+    return undefined;
   }
 
   const data = response.data;
   if (!isRecord(data)) {
-    return '请求失败';
+    return undefined;
   }
 
   const error = data.error;
   if (!isRecord(error)) {
-    return '请求失败';
+    return undefined;
   }
 
   const message = error.message;
-  return typeof message === 'string' && message.trim().length > 0 ? message : '请求失败';
-}
-
-function formatSource(source: SettingsResponseData['effective']['apiUrlSource']): string {
-  switch (source) {
-    case 'env':
-      return '环境变量';
-    case 'settings':
-      return 'Settings 页面';
-    case 'config':
-      return 'config/plugins.ts';
-    case 'default':
-      return '默认值';
-    default:
-      return '未知';
-  }
+  return typeof message === 'string' && message.trim().length > 0 ? message : undefined;
 }
 
 export default function SettingsPage() {
+  const { formatMessage } = useIntl();
+
   const fetchClient = useFetchClient();
   const { toggleNotification } = useNotification();
 
@@ -81,9 +111,72 @@ export default function SettingsPage() {
 
   const [settings, setSettings] = useState<SettingsResponseData | null>(null);
 
-  const [apiUrl, setApiUrl] = useState('');
-  const [model, setModel] = useState('');
-  const [apiKey, setApiKey] = useState('');
+  const [provider, setProvider] = useState<Provider>('openai');
+
+  const [openaiApiUrl, setOpenaiApiUrl] = useState('');
+  const [openaiModel, setOpenaiModel] = useState('');
+  const [openaiApiKey, setOpenaiApiKey] = useState('');
+
+  const [replicateModel, setReplicateModel] = useState('');
+  const [replicateApiToken, setReplicateApiToken] = useState('');
+
+  function formatSource(source: ValueSource): string {
+    switch (source) {
+      case 'env':
+        return formatMessage({
+          id: getTrad('settings.source.env'),
+          defaultMessage: 'Environment variable',
+        });
+      case 'settings':
+        return formatMessage({
+          id: getTrad('settings.source.settings'),
+          defaultMessage: 'Settings page',
+        });
+      case 'config':
+        return formatMessage({
+          id: getTrad('settings.source.config'),
+          defaultMessage: 'config/plugins.ts',
+        });
+      case 'default':
+        return formatMessage({
+          id: getTrad('settings.source.default'),
+          defaultMessage: 'Default',
+        });
+      default:
+        return formatMessage({ id: getTrad('common.unknown'), defaultMessage: 'Unknown' });
+    }
+  }
+
+  function formatProvider(value: Provider): string {
+    return value === 'replicate'
+      ? formatMessage({
+          id: getTrad('settings.providerName.replicate'),
+          defaultMessage: 'Replicate',
+        })
+      : formatMessage({
+          id: getTrad('settings.providerName.openai'),
+          defaultMessage: 'OpenAI-compatible',
+        });
+  }
+
+  const notConfiguredLabel = useMemo(() => {
+    return formatMessage({ id: getTrad('common.notConfigured'), defaultMessage: 'Not configured' });
+  }, [formatMessage]);
+
+  const defaultLabel = useMemo(() => {
+    return formatMessage({ id: getTrad('common.default'), defaultMessage: 'Default' });
+  }, [formatMessage]);
+
+  function formatSecretPlaceholder(isSet: boolean, length: number): string {
+    if (!isSet) {
+      return notConfiguredLabel;
+    }
+
+    return formatMessage(
+      { id: getTrad('common.configuredLength'), defaultMessage: 'Configured (length: {length})' },
+      { length }
+    );
+  }
 
   const envWarning = useMemo(() => {
     if (!settings) {
@@ -92,102 +185,281 @@ export default function SettingsPage() {
 
     const warnings: string[] = [];
 
-    if (settings.env.apiKeySet) {
-      warnings.push('检测到环境变量 AI_TRANSLATE_API_KEY：Settings 页面里保存的 API Key 不会生效。');
+    if (settings.env.providerSet) {
+      warnings.push(
+        formatMessage(
+          {
+            id: getTrad('settings.envOverride.provider'),
+            defaultMessage:
+              'Detected environment variable {name}. Provider saved in Settings page will be ignored.',
+          },
+          { name: 'AI_TRANSLATE_PROVIDER' }
+        )
+      );
     }
-    if (settings.env.apiUrlSet) {
-      warnings.push('检测到环境变量 AI_TRANSLATE_API_URL：Settings 页面里保存的 API 端点不会生效。');
+
+    if (settings.env.openai.apiKeySet) {
+      warnings.push(
+        formatMessage(
+          {
+            id: getTrad('settings.envOverride.openai.apiKey'),
+            defaultMessage:
+              'Detected environment variable {name}. OpenAI API Key saved in Settings page will be ignored.',
+          },
+          { name: 'AI_TRANSLATE_API_KEY' }
+        )
+      );
     }
-    if (settings.env.modelSet) {
-      warnings.push('检测到环境变量 AI_TRANSLATE_MODEL：Settings 页面里保存的模型名不会生效。');
+    if (settings.env.openai.apiUrlSet) {
+      warnings.push(
+        formatMessage(
+          {
+            id: getTrad('settings.envOverride.openai.apiUrl'),
+            defaultMessage:
+              'Detected environment variable {name}. OpenAI API endpoint saved in Settings page will be ignored.',
+          },
+          { name: 'AI_TRANSLATE_API_URL' }
+        )
+      );
+    }
+    if (settings.env.openai.modelSet) {
+      warnings.push(
+        formatMessage(
+          {
+            id: getTrad('settings.envOverride.openai.model'),
+            defaultMessage:
+              'Detected environment variable {name}. OpenAI model saved in Settings page will be ignored.',
+          },
+          { name: 'AI_TRANSLATE_MODEL' }
+        )
+      );
+    }
+
+    if (settings.env.replicate.apiTokenSet) {
+      warnings.push(
+        formatMessage(
+          {
+            id: getTrad('settings.envOverride.replicate.apiToken'),
+            defaultMessage:
+              'Detected environment variable {name}. Replicate API Token saved in Settings page will be ignored.',
+          },
+          { name: 'AI_TRANSLATE_REPLICATE_API_TOKEN' }
+        )
+      );
+    }
+    if (settings.env.replicate.modelSet) {
+      warnings.push(
+        formatMessage(
+          {
+            id: getTrad('settings.envOverride.replicate.model'),
+            defaultMessage:
+              'Detected environment variable {name}. Replicate model saved in Settings page will be ignored.',
+          },
+          { name: 'AI_TRANSLATE_REPLICATE_MODEL' }
+        )
+      );
     }
 
     return warnings.length > 0 ? warnings.join('\n') : null;
-  }, [settings]);
+  }, [formatMessage, settings]);
 
-  const load = useCallback(async function load() {
-    setIsLoading(true);
-    setError(null);
+  const load = useCallback(
+    async function load() {
+      setIsLoading(true);
+      setError(null);
 
-    try {
-      const response = (await fetchClient.get('/ai-translate/settings')) as SettingsResponse;
-      const data = response?.data;
+      try {
+        const response = (await fetchClient.get('/ai-translate/settings')) as SettingsResponse;
+        const data = response?.data;
 
-      if (!data || typeof data !== 'object' || !('stored' in data)) {
-        throw new Error('返回数据格式不正确');
+        if (!data || typeof data !== 'object' || !('stored' in data)) {
+          throw new Error(
+            formatMessage({
+              id: getTrad('settings.error.invalidResponse'),
+              defaultMessage: 'Invalid response payload.',
+            })
+          );
+        }
+
+        setSettings(data);
+
+        setProvider(data.stored.provider ?? 'openai');
+
+        setOpenaiApiUrl(data.stored.openai.apiUrl ?? '');
+        setOpenaiModel(data.stored.openai.model ?? '');
+        setOpenaiApiKey('');
+
+        setReplicateModel(data.stored.replicate.model ?? '');
+        setReplicateApiToken('');
+      } catch (err: unknown) {
+        setError(
+          getApiErrorMessage(err) ||
+            (err instanceof Error
+              ? err.message
+              : formatMessage({
+                  id: getTrad('settings.error.loadFailed'),
+                  defaultMessage: 'Failed to load settings.',
+                }))
+        );
+      } finally {
+        setIsLoading(false);
       }
-
-      setSettings(data);
-      setApiUrl(data.stored.apiUrl ?? '');
-      setModel(data.stored.model ?? '');
-      setApiKey('');
-    } catch (err: unknown) {
-      setError(getErrorMessage(err) || (err instanceof Error ? err.message : '读取设置失败'));
-    } finally {
-      setIsLoading(false);
-    }
-  }, [fetchClient]);
+    },
+    [fetchClient, formatMessage]
+  );
 
   useEffect(() => {
     load();
   }, [load]);
 
-  const handleSave = useCallback(async function handleSave() {
-    setIsSaving(true);
-    setError(null);
+  const handleSave = useCallback(
+    async function handleSave() {
+      setIsSaving(true);
+      setError(null);
 
-    try {
-      const payload: Record<string, unknown> = {
-        apiUrl,
-        model,
-      };
+      try {
+        const payload: Record<string, unknown> = {
+          provider,
+          apiUrl: openaiApiUrl,
+          model: openaiModel,
+          replicateModel,
+        };
 
-      if (apiKey.trim().length > 0) {
-        payload.apiKey = apiKey.trim();
+        if (openaiApiKey.trim().length > 0) {
+          payload.apiKey = openaiApiKey.trim();
+        }
+
+        if (replicateApiToken.trim().length > 0) {
+          payload.replicateApiToken = replicateApiToken.trim();
+        }
+
+        await fetchClient.put('/ai-translate/settings', payload);
+
+        toggleNotification({
+          type: 'success',
+          message: formatMessage({
+            id: getTrad('settings.notification.saved'),
+            defaultMessage: 'Settings saved.',
+          }),
+        });
+
+        await load();
+      } catch (err: unknown) {
+        toggleNotification({
+          type: 'danger',
+          message: formatMessage({
+            id: getTrad('settings.notification.saveFailed'),
+            defaultMessage: 'Save failed.',
+          }),
+        });
+        setError(
+          getApiErrorMessage(err) ||
+            (err instanceof Error
+              ? err.message
+              : formatMessage({
+                  id: getTrad('settings.error.saveFailed'),
+                  defaultMessage: 'Failed to save settings.',
+                }))
+        );
+      } finally {
+        setIsSaving(false);
       }
+    },
+    [
+      fetchClient,
+      formatMessage,
+      load,
+      openaiApiKey,
+      openaiApiUrl,
+      openaiModel,
+      provider,
+      replicateApiToken,
+      replicateModel,
+      toggleNotification,
+    ]
+  );
 
-      await fetchClient.put('/ai-translate/settings', payload);
+  const handleClearOpenAiApiKey = useCallback(
+    async function handleClearOpenAiApiKey() {
+      setIsSaving(true);
+      setError(null);
 
-      toggleNotification({
-        type: 'success',
-        message: '设置已保存',
-      });
+      try {
+        await fetchClient.put('/ai-translate/settings', { apiKey: '' });
 
-      await load();
-    } catch (err: unknown) {
-      toggleNotification({
-        type: 'danger',
-        message: '保存失败',
-      });
-      setError(getErrorMessage(err) || (err instanceof Error ? err.message : '保存失败'));
-    } finally {
-      setIsSaving(false);
-    }
-  }, [apiKey, apiUrl, fetchClient, load, model, toggleNotification]);
+        toggleNotification({
+          type: 'success',
+          message: formatMessage({
+            id: getTrad('settings.notification.clearedOpenaiApiKey'),
+            defaultMessage: 'OpenAI API Key cleared.',
+          }),
+        });
 
-  const handleClearApiKey = useCallback(async function handleClearApiKey() {
-    setIsSaving(true);
-    setError(null);
+        await load();
+      } catch (err: unknown) {
+        toggleNotification({
+          type: 'danger',
+          message: formatMessage({
+            id: getTrad('settings.notification.clearFailed'),
+            defaultMessage: 'Clear failed.',
+          }),
+        });
+        setError(
+          getApiErrorMessage(err) ||
+            (err instanceof Error
+              ? err.message
+              : formatMessage({
+                  id: getTrad('settings.error.clearFailed'),
+                  defaultMessage: 'Failed to clear API Key.',
+                }))
+        );
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [fetchClient, formatMessage, load, toggleNotification]
+  );
 
-    try {
-      await fetchClient.put('/ai-translate/settings', { apiKey: '' });
+  const handleClearReplicateApiToken = useCallback(
+    async function handleClearReplicateApiToken() {
+      setIsSaving(true);
+      setError(null);
 
-      toggleNotification({
-        type: 'success',
-        message: 'API Key 已清除',
-      });
+      try {
+        await fetchClient.put('/ai-translate/settings', { replicateApiToken: '' });
 
-      await load();
-    } catch (err: unknown) {
-      toggleNotification({
-        type: 'danger',
-        message: '清除失败',
-      });
-      setError(getErrorMessage(err) || (err instanceof Error ? err.message : '清除失败'));
-    } finally {
-      setIsSaving(false);
-    }
-  }, [fetchClient, load, toggleNotification]);
+        toggleNotification({
+          type: 'success',
+          message: formatMessage({
+            id: getTrad('settings.notification.clearedReplicateApiToken'),
+            defaultMessage: 'Replicate API Token cleared.',
+          }),
+        });
+
+        await load();
+      } catch (err: unknown) {
+        toggleNotification({
+          type: 'danger',
+          message: formatMessage({
+            id: getTrad('settings.notification.clearFailed'),
+            defaultMessage: 'Clear failed.',
+          }),
+        });
+        setError(
+          getApiErrorMessage(err) ||
+            (err instanceof Error
+              ? err.message
+              : formatMessage({
+                  id: getTrad('settings.error.clearFailed'),
+                  defaultMessage: 'Failed to clear API Token.',
+                }))
+        );
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [fetchClient, formatMessage, load, toggleNotification]
+  );
 
   if (isLoading) {
     return <Page.Loading />;
@@ -196,24 +468,39 @@ export default function SettingsPage() {
   return (
     <Page.Main tabIndex={-1}>
       <Layouts.Header
-        title="AI Translate"
-        subtitle="配置翻译服务（API Key / 模型 / API 端点）"
+        title={formatMessage({ id: getTrad('settings.title'), defaultMessage: 'AI Translate' })}
+        subtitle={formatMessage({
+          id: getTrad('settings.subtitle'),
+          defaultMessage: 'Configure translation provider, credentials, model, and endpoint.',
+        })}
         primaryAction={
           <Button loading={isSaving} onClick={handleSave} disabled={isSaving}>
-            保存
+            {formatMessage({ id: getTrad('common.save'), defaultMessage: 'Save' })}
           </Button>
         }
       />
+
       <Layouts.Content>
         <Box paddingBottom={4}>
           <Typography variant="epsilon" textColor="neutral600">
-            注意：将 API Key 保存到数据库会降低密钥安全性。生产环境建议使用环境变量（AI_TRANSLATE_API_KEY）。
+            {formatMessage({
+              id: getTrad('settings.securityNotice'),
+              defaultMessage:
+                'Note: Saving secrets to the database reduces security. In production, environment variables are recommended. For safety, the server will not return the key/token contents, only whether it is configured and its length.',
+            })}
           </Typography>
         </Box>
 
         {envWarning && (
           <Box paddingBottom={4}>
-            <Alert closeLabel="Close" title="环境变量覆盖" variant="warning">
+            <Alert
+              closeLabel={formatMessage({ id: getTrad('common.close'), defaultMessage: 'Close' })}
+              title={formatMessage({
+                id: getTrad('settings.envOverride.title'),
+                defaultMessage: 'Environment variables override',
+              })}
+              variant="warning"
+            >
               <Typography style={{ whiteSpace: 'pre-line' }}>{envWarning}</Typography>
             </Alert>
           </Box>
@@ -221,7 +508,12 @@ export default function SettingsPage() {
 
         {error && (
           <Box paddingBottom={4}>
-            <Alert closeLabel="Close" title="错误" variant="danger" onClose={() => setError(null)}>
+            <Alert
+              closeLabel={formatMessage({ id: getTrad('common.close'), defaultMessage: 'Close' })}
+              title={formatMessage({ id: getTrad('common.error'), defaultMessage: 'Error' })}
+              variant="danger"
+              onClose={() => setError(null)}
+            >
               {error}
             </Alert>
           </Box>
@@ -229,75 +521,359 @@ export default function SettingsPage() {
 
         <Box background="neutral0" padding={6} shadow="filterShadow" hasRadius>
           <Box paddingBottom={4}>
-            <Typography variant="delta">连接设置</Typography>
+            <Typography variant="delta">
+              {formatMessage({ id: getTrad('settings.provider.sectionTitle'), defaultMessage: 'Provider' })}
+            </Typography>
           </Box>
 
           <Box paddingBottom={4}>
-            <Field.Root name="apiUrl">
-              <Field.Label>API 端点（baseURL）</Field.Label>
-              <TextInput
-                placeholder="例如：https://api.openai.com/v1"
-                value={apiUrl}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setApiUrl(e.target.value)}
-              />
+            <Field.Root name="provider">
+              <Field.Label>
+                {formatMessage({ id: getTrad('settings.provider.label'), defaultMessage: 'AI provider' })}
+              </Field.Label>
+              <SingleSelect value={provider} onChange={(value) => setProvider(value as Provider)}>
+                <SingleSelectOption value="openai">
+                  {formatMessage({
+                    id: getTrad('settings.provider.option.openai'),
+                    defaultMessage: 'OpenAI-compatible (Chat Completions)',
+                  })}
+                </SingleSelectOption>
+                <SingleSelectOption value="replicate">
+                  {formatMessage({
+                    id: getTrad('settings.provider.option.replicate'),
+                    defaultMessage: 'Replicate (replicate.run)',
+                  })}
+                </SingleSelectOption>
+              </SingleSelect>
               <Field.Hint>
-                留空表示使用 SDK 默认值；如果你使用代理/转发服务，请填入对应的 OpenAI-compatible baseURL。
+                {formatMessage({
+                  id: getTrad('settings.provider.hint'),
+                  defaultMessage:
+                    'OpenAI-compatible uses `POST /v1/chat/completions`; Replicate uses the official SDK to run models.',
+                })}
               </Field.Hint>
             </Field.Root>
           </Box>
 
-          <Box paddingBottom={4}>
-            <Field.Root name="model">
-              <Field.Label>模型名称</Field.Label>
-              <TextInput
-                placeholder="例如：gpt-4o-mini"
-                value={model}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setModel(e.target.value)}
-              />
-              <Field.Hint>留空则使用默认模型（gpt-4o-mini）。</Field.Hint>
-            </Field.Root>
-          </Box>
+          {provider === 'openai' && (
+            <>
+              <Box paddingBottom={4}>
+                <Typography variant="delta">
+                  {formatMessage({
+                    id: getTrad('settings.openai.sectionTitle'),
+                    defaultMessage: 'OpenAI-compatible',
+                  })}
+                </Typography>
+              </Box>
 
-          <Box paddingBottom={4}>
-            <Field.Root name="apiKey">
-              <Field.Label>API Key</Field.Label>
-              <TextInput
-                type="password"
-                placeholder={settings?.stored.apiKeySet ? `已配置：${settings.stored.apiKeyMasked}` : '未配置'}
-                value={apiKey}
-                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setApiKey(e.target.value)}
-              />
-              <Field.Hint>
-                不输入则保持现有值不变；如需修改请输入新的 key。你也可以点击下面的“清除 API Key”。
-              </Field.Hint>
-            </Field.Root>
-          </Box>
+              <Box paddingBottom={4}>
+                <Field.Root name="openaiApiUrl">
+                  <Field.Label>
+                    {formatMessage({
+                      id: getTrad('settings.openai.apiUrl.label'),
+                      defaultMessage: 'API endpoint (baseURL)',
+                    })}
+                  </Field.Label>
+                  <TextInput
+                    placeholder={formatMessage({
+                      id: getTrad('settings.openai.apiUrl.placeholder'),
+                      defaultMessage: 'e.g. https://api.openai.com/v1',
+                    })}
+                    value={openaiApiUrl}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setOpenaiApiUrl(e.target.value)}
+                  />
+                  <Field.Hint>
+                    {formatMessage({
+                      id: getTrad('settings.openai.apiUrl.hint'),
+                      defaultMessage:
+                        'Leave blank to use the SDK default. If you use a proxy/forwarding service, enter its OpenAI-compatible baseURL.',
+                    })}
+                  </Field.Hint>
+                </Field.Root>
+              </Box>
 
-          <Box paddingTop={2}>
-            <Button variant="danger-light" onClick={handleClearApiKey} disabled={isSaving}>
-              清除 API Key
-            </Button>
-          </Box>
+              <Box paddingBottom={4}>
+                <Field.Root name="openaiModel">
+                  <Field.Label>
+                    {formatMessage({
+                      id: getTrad('settings.openai.model.label'),
+                      defaultMessage: 'Model name',
+                    })}
+                  </Field.Label>
+                  <TextInput
+                    placeholder={formatMessage({
+                      id: getTrad('settings.openai.model.placeholder'),
+                      defaultMessage: 'e.g. gpt-4o-mini',
+                    })}
+                    value={openaiModel}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setOpenaiModel(e.target.value)}
+                  />
+                  <Field.Hint>
+                    {formatMessage({
+                      id: getTrad('settings.openai.model.hint'),
+                      defaultMessage: 'Leave blank to use the default model (gpt-4o-mini).',
+                    })}
+                  </Field.Hint>
+                </Field.Root>
+              </Box>
+
+              <Box paddingBottom={4}>
+                <Field.Root name="openaiApiKey">
+                  <Field.Label>
+                    {formatMessage({
+                      id: getTrad('settings.openai.apiKey.label'),
+                      defaultMessage: 'API Key',
+                    })}
+                  </Field.Label>
+                  <TextInput
+                    type="password"
+                    placeholder={formatSecretPlaceholder(
+                      settings?.stored.openai.apiKeySet === true,
+                      settings?.stored.openai.apiKeyLength ?? 0
+                    )}
+                    value={openaiApiKey}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setOpenaiApiKey(e.target.value)}
+                  />
+                  <Field.Hint>
+                    {formatMessage({
+                      id: getTrad('settings.openai.apiKey.hint'),
+                      defaultMessage:
+                        'Leave blank to keep the existing value. To change it, enter a new key. You can also click "Clear OpenAI API Key" below.',
+                    })}
+                  </Field.Hint>
+                </Field.Root>
+              </Box>
+
+              <Box paddingTop={2}>
+                <Button variant="danger-light" onClick={handleClearOpenAiApiKey} disabled={isSaving}>
+                  {formatMessage({
+                    id: getTrad('settings.openai.clearApiKey'),
+                    defaultMessage: 'Clear OpenAI API Key',
+                  })}
+                </Button>
+              </Box>
+            </>
+          )}
+
+          {provider === 'replicate' && (
+            <>
+              <Box paddingBottom={4}>
+                <Typography variant="delta">
+                  {formatMessage({
+                    id: getTrad('settings.replicate.sectionTitle'),
+                    defaultMessage: 'Replicate',
+                  })}
+                </Typography>
+              </Box>
+
+              <Box paddingBottom={4}>
+                <Field.Root name="replicateModel">
+                  <Field.Label>
+                    {formatMessage({
+                      id: getTrad('settings.replicate.model.label'),
+                      defaultMessage: 'Model (model id)',
+                    })}
+                  </Field.Label>
+                  <TextInput
+                    placeholder={formatMessage({
+                      id: getTrad('settings.replicate.model.placeholder'),
+                      defaultMessage: 'e.g. meta/meta-llama-3-70b-instruct',
+                    })}
+                    value={replicateModel}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setReplicateModel(e.target.value)}
+                  />
+                  <Field.Hint>
+                    {formatMessage({
+                      id: getTrad('settings.replicate.model.hint'),
+                      defaultMessage:
+                        'Enter Replicate model identifier (owner/name or owner/name:version).',
+                    })}
+                  </Field.Hint>
+                </Field.Root>
+              </Box>
+
+              <Box paddingBottom={4}>
+                <Field.Root name="replicateApiToken">
+                  <Field.Label>
+                    {formatMessage({
+                      id: getTrad('settings.replicate.apiToken.label'),
+                      defaultMessage: 'API Token',
+                    })}
+                  </Field.Label>
+                  <TextInput
+                    type="password"
+                    placeholder={formatSecretPlaceholder(
+                      settings?.stored.replicate.apiTokenSet === true,
+                      settings?.stored.replicate.apiTokenLength ?? 0
+                    )}
+                    value={replicateApiToken}
+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => setReplicateApiToken(e.target.value)}
+                  />
+                  <Field.Hint>
+                    {formatMessage({
+                      id: getTrad('settings.replicate.apiToken.hint'),
+                      defaultMessage:
+                        'Leave blank to keep the existing value. To change it, enter a new token. You can also click "Clear Replicate API Token" below.',
+                    })}
+                  </Field.Hint>
+                </Field.Root>
+              </Box>
+
+              <Box paddingTop={2}>
+                <Button variant="danger-light" onClick={handleClearReplicateApiToken} disabled={isSaving}>
+                  {formatMessage({
+                    id: getTrad('settings.replicate.clearApiToken'),
+                    defaultMessage: 'Clear Replicate API Token',
+                  })}
+                </Button>
+              </Box>
+            </>
+          )}
         </Box>
 
         {settings && (
           <Box paddingTop={6}>
             <Box background="neutral0" padding={6} shadow="filterShadow" hasRadius>
               <Box paddingBottom={4}>
-                <Typography variant="delta">当前生效配置</Typography>
+                <Typography variant="delta">
+                  {formatMessage({
+                    id: getTrad('settings.effective.sectionTitle'),
+                    defaultMessage: 'Effective configuration',
+                  })}
+                </Typography>
               </Box>
+
               <Typography variant="epsilon" textColor="neutral700">
-                API 端点：{settings.effective.apiUrl || '默认'}（来源：{formatSource(settings.effective.apiUrlSource)}）
+                {formatMessage(
+                  {
+                    id: getTrad('settings.effective.providerLine'),
+                    defaultMessage: 'Provider: {provider} (source: {source})',
+                  },
+                  {
+                    provider: formatProvider(settings.effective.provider),
+                    source: formatSource(settings.effective.providerSource),
+                  }
+                )}
               </Typography>
-              <Typography variant="epsilon" textColor="neutral700">
-                模型：{settings.effective.model}（来源：{formatSource(settings.effective.modelSource)}）
-              </Typography>
-              <Typography variant="epsilon" textColor="neutral700">
-                API Key：{settings.effective.apiKeySet ? `已配置（来源：${formatSource(settings.effective.apiKeySource)}）` : '未配置'}
-              </Typography>
+
+              {settings.effective.provider === 'openai' && (
+                <>
+                  <Typography variant="epsilon" textColor="neutral700">
+                    {formatMessage(
+                      {
+                        id: getTrad('settings.effective.openai.apiUrlLine'),
+                        defaultMessage: 'OpenAI API endpoint: {value} (source: {source})',
+                      },
+                      {
+                        value: settings.effective.openai.apiUrl || defaultLabel,
+                        source: formatSource(settings.effective.openai.apiUrlSource),
+                      }
+                    )}
+                  </Typography>
+                  <Typography variant="epsilon" textColor="neutral700">
+                    {formatMessage(
+                      {
+                        id: getTrad('settings.effective.openai.modelLine'),
+                        defaultMessage: 'OpenAI model: {value} (source: {source})',
+                      },
+                      {
+                        value: settings.effective.openai.model,
+                        source: formatSource(settings.effective.openai.modelSource),
+                      }
+                    )}
+                  </Typography>
+                  <Typography variant="epsilon" textColor="neutral700">
+                    {settings.effective.openai.apiKeySet
+                      ? formatMessage(
+                          {
+                            id: getTrad('settings.effective.openai.apiKey.setLine'),
+                            defaultMessage:
+                              'OpenAI API Key: Configured (length: {length}, source: {source})',
+                          },
+                          {
+                            length: settings.effective.openai.apiKeyLength,
+                            source: formatSource(settings.effective.openai.apiKeySource),
+                          }
+                        )
+                      : formatMessage({
+                          id: getTrad('settings.effective.openai.apiKey.unsetLine'),
+                          defaultMessage: 'OpenAI API Key: Not configured',
+                        })}
+                  </Typography>
+                </>
+              )}
+
+              {settings.effective.provider === 'replicate' && (
+                <>
+                  <Typography variant="epsilon" textColor="neutral700">
+                    {formatMessage(
+                      {
+                        id: getTrad('settings.effective.replicate.modelLine'),
+                        defaultMessage: 'Replicate model: {value} (source: {source})',
+                      },
+                      {
+                        value: settings.effective.replicate.model || notConfiguredLabel,
+                        source: formatSource(settings.effective.replicate.modelSource),
+                      }
+                    )}
+                  </Typography>
+                  <Typography variant="epsilon" textColor="neutral700">
+                    {settings.effective.replicate.apiTokenSet
+                      ? formatMessage(
+                          {
+                            id: getTrad('settings.effective.replicate.apiToken.setLine'),
+                            defaultMessage:
+                              'Replicate API Token: Configured (length: {length}, source: {source})',
+                          },
+                          {
+                            length: settings.effective.replicate.apiTokenLength,
+                            source: formatSource(settings.effective.replicate.apiTokenSource),
+                          }
+                        )
+                      : formatMessage({
+                          id: getTrad('settings.effective.replicate.apiToken.unsetLine'),
+                          defaultMessage: 'Replicate API Token: Not configured',
+                        })}
+                  </Typography>
+                </>
+              )}
             </Box>
           </Box>
         )}
+
+        <Box paddingTop={6}>
+          <Box background="neutral0" padding={6} shadow="filterShadow" hasRadius>
+            <Box paddingBottom={2}>
+              <Typography variant="delta">
+                {formatMessage({
+                  id: getTrad('settings.support.sectionTitle'),
+                  defaultMessage: 'Support the author',
+                })}
+              </Typography>
+            </Box>
+
+            <Typography variant="epsilon" textColor="neutral700">
+              {formatMessage({
+                id: getTrad('settings.support.descriptionPrefix'),
+                defaultMessage: 'If this plugin helps you, consider buying me a coffee: ',
+              })}
+              <a href="https://buymeacoffee.com/meathill" target="_blank" rel="noopener noreferrer">
+                buymeacoffee.com/meathill
+              </a>
+            </Typography>
+
+            <Box paddingTop={4} display="flex" justifyContent="center">
+              <img
+                src={buyMeACoffeeQrCodePng}
+                alt={formatMessage({
+                  id: getTrad('settings.support.qrAlt'),
+                  defaultMessage: 'Buy Me a Coffee QR code',
+                })}
+                style={{ width: 220, maxWidth: '100%', borderRadius: 8 }}
+              />
+            </Box>
+          </Box>
+        </Box>
       </Layouts.Content>
     </Page.Main>
   );

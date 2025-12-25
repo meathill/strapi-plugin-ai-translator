@@ -4,6 +4,7 @@ import {
   useFetchClient,
   useQueryParams,
 } from '@strapi/strapi/admin';
+
 import {
   Alert,
   Box,
@@ -17,6 +18,8 @@ import {
   Typography,
 } from '@strapi/design-system';
 import { Magic } from '@strapi/icons';
+import { useIntl } from 'react-intl';
+import getTrad from '../../utils/get-trad';
 
 type LocaleItem = {
   id: number;
@@ -106,6 +109,8 @@ function isValueEmpty(value: unknown): boolean {
 }
 
 export default function EditViewRightLinks() {
+  const { formatMessage } = useIntl();
+
   const context = useContentManagerContext();
   const fetchClient = useFetchClient();
   const [{ query, rawQuery }] = useQueryParams<Record<string, unknown>>();
@@ -140,16 +145,26 @@ export default function EditViewRightLinks() {
   const targetLocaleLabel = useMemo(() => {
     const matched = locales.find((l) => l.code === targetLocale);
     if (matched) {
-      return `${matched.name}（${matched.code}）`;
+      return formatMessage(
+        { id: getTrad('editView.localeLabel'), defaultMessage: '{name} ({code})' },
+        { name: matched.name, code: matched.code }
+      );
     }
-    return targetLocale || '未知';
-  }, [locales, targetLocale]);
+
+    return (
+      targetLocale ||
+      formatMessage({ id: getTrad('common.unknown'), defaultMessage: 'Unknown' })
+    );
+  }, [formatMessage, locales, targetLocale]);
 
   if (!isLocalized) {
     return (
       <Box padding={4}>
         <Typography variant="epsilon" textColor="neutral600">
-          当前 Content Type 未启用 i18n，AI Translate 不可用。
+          {formatMessage({
+            id: getTrad('editView.unavailableNoI18n'),
+            defaultMessage: 'This Content Type does not have i18n enabled. AI Translate is unavailable.',
+          })}
         </Typography>
       </Box>
     );
@@ -165,21 +180,38 @@ export default function EditViewRightLinks() {
   const canTranslate = Boolean(onChange && uid && inferredDocumentId && targetLocale);
 
   const translateDisabledReason = !uid
-    ? '无法读取内容类型（uid）'
+    ? formatMessage({
+        id: getTrad('editView.disabled.uid'),
+        defaultMessage: 'Cannot read content type (uid).',
+      })
     : !inferredDocumentId
-      ? '请先保存条目（需要 documentId）'
+      ? formatMessage({
+          id: getTrad('editView.disabled.documentId'),
+          defaultMessage: 'Please save the entry first (requires documentId).',
+        })
       : !targetLocale
-        ? '未识别当前目标语言（locale）'
+        ? formatMessage({
+            id: getTrad('editView.disabled.targetLocale'),
+            defaultMessage: 'Target locale not detected (locale).',
+          })
         : !onChange
-          ? '表单接口未就绪（onChange）'
+          ? formatMessage({
+              id: getTrad('editView.disabled.onChange'),
+              defaultMessage: 'Form API not ready (onChange).',
+            })
           : null;
 
   const localeOptions = useMemo(() => {
     return locales.map((item) => ({
-      label: item.isDefault ? `${item.name}（默认）` : item.name,
+      label: item.isDefault
+        ? formatMessage(
+            { id: getTrad('editView.localeOptionDefault'), defaultMessage: '{name} (default)' },
+            { name: item.name }
+          )
+        : item.name,
       value: item.code,
     }));
-  }, [locales]);
+  }, [formatMessage, locales]);
 
   useEffect(() => {
     if (!isVisible) {
@@ -218,12 +250,20 @@ export default function EditViewRightLinks() {
           }
         }
       } catch (err: unknown) {
-        setError(getApiErrorMessage(err) || (err instanceof Error ? err.message : '读取语言列表失败'));
+        setError(
+          getApiErrorMessage(err) ||
+            (err instanceof Error
+              ? err.message
+              : formatMessage({
+                  id: getTrad('editView.error.loadLocalesFailed'),
+                  defaultMessage: 'Failed to load locales.',
+                }))
+        );
       }
     }
 
     loadLocales();
-  }, [fetchClient, isVisible, sourceLocale, targetLocale]);
+  }, [fetchClient, formatMessage, isVisible, sourceLocale, targetLocale]);
 
   async function handleTranslate() {
     setIsLoading(true);
@@ -231,15 +271,26 @@ export default function EditViewRightLinks() {
 
     try {
       if (!canTranslate) {
-        throw new Error('无法翻译：请先保存条目，并确保已选择目标语言（locale）');
+        throw new Error(
+          formatMessage({
+            id: getTrad('editView.error.translateImpossible'),
+            defaultMessage: 'Cannot translate: please save the entry and make sure the target locale is detected.',
+          })
+        );
       }
       if (!sourceLocale) {
-        throw new Error('请选择源语言');
+        throw new Error(
+          formatMessage({
+            id: getTrad('editView.error.sourceLocaleRequired'),
+            defaultMessage: 'Please select a source locale.',
+          })
+        );
       }
 
       const endpoint = '/ai-translate/translate-document';
 
       if (isDebugEnabled()) {
+        // eslint-disable-next-line no-console
         console.log('[ai-translate] 请求翻译接口：', endpoint);
       }
 
@@ -254,7 +305,12 @@ export default function EditViewRightLinks() {
 
       const translated = response.data;
       if (!isRecord(translated)) {
-        throw new Error('翻译接口返回数据不正确');
+        throw new Error(
+          formatMessage({
+            id: getTrad('editView.error.translateResponseInvalid'),
+            defaultMessage: 'Translate API returned invalid data.',
+          })
+        );
       }
 
       Object.keys(translated).forEach((key) => {
@@ -267,7 +323,15 @@ export default function EditViewRightLinks() {
 
       setIsVisible(false);
     } catch (err: unknown) {
-      setError(getApiErrorMessage(err) || (err instanceof Error ? err.message : '翻译失败'));
+      setError(
+        getApiErrorMessage(err) ||
+          (err instanceof Error
+            ? err.message
+            : formatMessage({
+                id: getTrad('editView.error.translateFailed'),
+                defaultMessage: 'Translation failed.',
+              }))
+      );
     } finally {
       setIsLoading(false);
     }
@@ -276,7 +340,7 @@ export default function EditViewRightLinks() {
   return (
     <Box padding={4}>
       <Typography variant="sigma" textColor="neutral600" textTransform="uppercase">
-        AI Tools
+        {formatMessage({ id: getTrad('editView.sectionTitle'), defaultMessage: 'AI Tools' })}
       </Typography>
 
       <Box paddingTop={2}>
@@ -287,21 +351,37 @@ export default function EditViewRightLinks() {
           fullWidth
           disabled={!uid}
         >
-          AI Translate
+          {formatMessage({ id: getTrad('editView.openButton'), defaultMessage: 'AI Translate' })}
         </Button>
       </Box>
 
       <Modal.Root open={isVisible} onOpenChange={setIsVisible}>
         <Modal.Content>
-          <Modal.Header closeLabel="关闭">
-            <Modal.Title>AI Translate</Modal.Title>
+          <Modal.Header
+            closeLabel={formatMessage({ id: getTrad('common.close'), defaultMessage: 'Close' })}
+          >
+            <Modal.Title>
+              {formatMessage({ id: getTrad('editView.modal.title'), defaultMessage: 'AI Translate' })}
+            </Modal.Title>
           </Modal.Header>
 
           <Modal.Body>
             <Box paddingBottom={4}>
-              <Typography variant="beta">目标语言（当前编辑）：{targetLocaleLabel}</Typography>
+              <Typography variant="beta">
+                {formatMessage(
+                  {
+                    id: getTrad('editView.modal.targetLocale'),
+                    defaultMessage: 'Target locale (currently editing): {label}',
+                  },
+                  { label: targetLocaleLabel }
+                )}
+              </Typography>
               <Typography variant="epsilon" textColor="neutral600">
-                将从源语言版本读取内容并翻译，然后回填到当前表单（不自动保存）。
+                {formatMessage({
+                  id: getTrad('editView.modal.description'),
+                  defaultMessage:
+                    'It will read the content from the source locale version, translate it, then fill it back into the current form (it will not save automatically).',
+                })}
               </Typography>
               {translateDisabledReason && (
                 <Typography variant="epsilon" textColor="danger600" style={{ marginTop: 8 }}>
@@ -312,7 +392,12 @@ export default function EditViewRightLinks() {
 
             {error && (
               <Box paddingBottom={4}>
-                <Alert closeLabel="Close" title="Error" variant="danger" onClose={() => setError(null)}>
+                <Alert
+                  closeLabel={formatMessage({ id: getTrad('common.close'), defaultMessage: 'Close' })}
+                  title={formatMessage({ id: getTrad('common.error'), defaultMessage: 'Error' })}
+                  variant="danger"
+                  onClose={() => setError(null)}
+                >
                   {error}
                 </Alert>
               </Box>
@@ -320,11 +405,16 @@ export default function EditViewRightLinks() {
 
             <Box paddingBottom={4}>
               <Field.Root name="sourceLocale">
-                <Field.Label>源语言</Field.Label>
+                <Field.Label>
+                  {formatMessage({ id: getTrad('editView.sourceLocale.label'), defaultMessage: 'Source locale' })}
+                </Field.Label>
                 <SingleSelect
                   value={sourceLocale}
                   onChange={(value) => setSourceLocale(String(value))}
-                  placeholder="请选择源语言"
+                  placeholder={formatMessage({
+                    id: getTrad('editView.sourceLocale.placeholder'),
+                    defaultMessage: 'Select a source locale',
+                  })}
                   disabled={localeOptions.length === 0}
                 >
                   {localeOptions
@@ -340,35 +430,48 @@ export default function EditViewRightLinks() {
 
             <Box paddingBottom={4}>
               <Checkbox checked={overwrite} onCheckedChange={(checked) => setOverwrite(checked === true)}>
-                覆盖已有字段（默认只填充空字段）
+                {formatMessage({
+                  id: getTrad('editView.overwrite.label'),
+                  defaultMessage: 'Overwrite existing fields (default: only fill empty fields)',
+                })}
               </Checkbox>
             </Box>
 
             <Box paddingBottom={4}>
-              <Checkbox
-                checked={includeJson}
-                onCheckedChange={(checked) => setIncludeJson(checked === true)}
-              >
-                包含 JSON 字段（可能会误翻译配置/代码，谨慎开启）
+              <Checkbox checked={includeJson} onCheckedChange={(checked) => setIncludeJson(checked === true)}>
+                {formatMessage({
+                  id: getTrad('editView.includeJson.label'),
+                  defaultMessage: 'Include JSON fields (may translate config/code; use with caution)',
+                })}
               </Checkbox>
             </Box>
 
             <Textarea
-              label="自定义指令（可选）"
+              label={formatMessage({
+                id: getTrad('editView.prompt.label'),
+                defaultMessage: 'Custom instructions (optional)',
+              })}
               name="prompt"
               onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setPrompt(e.target.value)}
               value={prompt}
-              placeholder="例如：使用正式语气；技术术语保留英文；保持 Markdown 不变……"
+              placeholder={formatMessage({
+                id: getTrad('editView.prompt.placeholder'),
+                defaultMessage:
+                  'e.g. Use a formal tone; keep technical terms in English; preserve Markdown…',
+              })}
               rows={4}
             />
           </Modal.Body>
 
           <Modal.Footer justifyContent="space-between" gap={2}>
             <Button onClick={() => setIsVisible(false)} variant="tertiary">
-              取消
+              {formatMessage({ id: getTrad('common.cancel'), defaultMessage: 'Cancel' })}
             </Button>
             <Button onClick={handleTranslate} loading={isLoading} disabled={!canTranslate}>
-              翻译并回填
+              {formatMessage({
+                id: getTrad('editView.button.translateAndFill'),
+                defaultMessage: 'Translate & fill',
+              })}
             </Button>
           </Modal.Footer>
         </Modal.Content>

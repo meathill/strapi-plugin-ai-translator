@@ -1,25 +1,59 @@
 {
   "name": "strapi-plugin-ai-translate",
-  "version": "0.0.1",
-  "description": "AI Translation plugin for Strapi",
+  "version": "0.1.0",
+  "description": "AI Translation plugin for Strapi v5",
+  "keywords": [
+    "strapi",
+    "strapi-plugin",
+    "strapi-v5",
+    "i18n",
+    "translation",
+    "ai",
+    "openai",
+    "replicate"
+  ],
   "strapi": {
     "name": "ai-translate",
     "description": "Translate content using AI",
     "kind": "plugin",
     "displayName": "AI Translate"
   },
+  "scripts": {
+    "build:server": "node scripts/build-server.js",
+    "build:server:watch": "node scripts/build-server.js --watch",
+    "prepack": "node scripts/build-server.js"
+  },
+  "files": [
+    "admin",
+    "dist",
+    "scripts",
+    "server",
+    "strapi-admin.js",
+    "strapi-server.js",
+    "strapi-server.ts",
+    "README.md",
+    "README.zh.md",
+    "qr-code.png"
+  ],
   "dependencies": {
     "openai": "^6.15.0"
+  },
+  "optionalDependencies": {
+    "replicate": "^1.4.0"
   },
   "peerDependencies": {
     "@strapi/strapi": "^5.0.0",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",
+    "react-intl": "^6.6.2",
     "react-router-dom": "^6.0.0",
     "styled-components": "^6.0.0"
   },
   "devDependencies": {
     "typescript": "^5.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "engines": {
     "node": ">=18.0.0 <=24.x.x",

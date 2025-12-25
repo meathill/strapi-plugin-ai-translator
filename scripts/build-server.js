@@ -39,7 +39,7 @@ async function buildOnce(esbuild, entryFile, outFile) {
     target: ['node18'],
     sourcemap: true,
     logLevel: 'info',
-    external: ['@strapi/strapi', 'openai'],
+    external: ['@strapi/strapi', 'openai', 'replicate'],
   });
 }
 
@@ -53,7 +53,7 @@ async function buildWatch(esbuild, entryFile, outFile) {
     target: ['node18'],
     sourcemap: true,
     logLevel: 'info',
-    external: ['@strapi/strapi', 'openai'],
+    external: ['@strapi/strapi', 'openai', 'replicate'],
   });
 
   await context.watch();

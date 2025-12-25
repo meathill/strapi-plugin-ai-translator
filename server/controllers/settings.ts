@@ -1,22 +1,9 @@
 import { Core } from '@strapi/strapi';
 
-import type { AiTranslateSettings } from '../services/settings';
+import type { AiTranslateProvider, AiTranslateSettings } from '../services/settings';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
-}
-
-function maskApiKey(value: string): string {
-  const trimmed = value.trim();
-  if (trimmed.length === 0) {
-    return '';
-  }
-  if (trimmed.length <= 8) {
-    return '********';
-  }
-  const prefix = trimmed.slice(0, 3);
-  const suffix = trimmed.slice(-4);
-  return `${prefix}********${suffix}`;
 }
 
 function normalizeString(value: unknown): string | undefined {
@@ -25,6 +12,14 @@ function normalizeString(value: unknown): string | undefined {
   }
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function normalizeProvider(value: unknown): AiTranslateProvider | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed === 'openai' || trimmed === 'replicate' ? trimmed : undefined;
 }
 
 function hasOwn(obj: Record<string, unknown>, key: string): boolean {
@@ -49,42 +44,99 @@ function resolveEffectiveValue(
   return { value: fallback, source: 'default' };
 }
 
+function getSecretLength(value: string | undefined): number {
+  if (typeof value !== 'string') {
+    return 0;
+  }
+  return value.trim().length;
+}
+
 export default ({ strapi }: { strapi: Core.Strapi }) => ({
   async getSettings(ctx) {
-    const stored = (await strapi
-      .plugin('ai-translate')
-      .service('settings')
-      .getSettings()) as AiTranslateSettings;
+    const stored = (await strapi.plugin('ai-translate').service('settings').getSettings()) as AiTranslateSettings;
 
     const config = (strapi.config.get('plugin::ai-translate') as AiTranslateSettings | undefined) ?? {};
+
+    const envProvider = normalizeProvider(process.env.AI_TRANSLATE_PROVIDER);
 
     const envApiKey = process.env.AI_TRANSLATE_API_KEY;
     const envApiUrl = process.env.AI_TRANSLATE_API_URL;
     const envModel = process.env.AI_TRANSLATE_MODEL;
 
+    const envReplicateApiToken = process.env.AI_TRANSLATE_REPLICATE_API_TOKEN;
+    const envReplicateModel = process.env.AI_TRANSLATE_REPLICATE_MODEL;
+
+    const effectiveProvider = resolveEffectiveValue(
+      envProvider,
+      stored.provider,
+      normalizeProvider(config.provider),
+      'openai'
+    );
+
     const effectiveApiUrl = resolveEffectiveValue(envApiUrl, stored.apiUrl, config.apiUrl, undefined);
     const effectiveModel = resolveEffectiveValue(envModel, stored.model, config.model, 'gpt-4o-mini');
     const effectiveApiKey = resolveEffectiveValue(envApiKey, stored.apiKey, config.apiKey, undefined);
 
+    const effectiveReplicateModel = resolveEffectiveValue(
+      envReplicateModel,
+      stored.replicateModel,
+      config.replicateModel,
+      ''
+    );
+
+    const effectiveReplicateApiToken = resolveEffectiveValue(
+      envReplicateApiToken,
+      stored.replicateApiToken,
+      config.replicateApiToken,
+      undefined
+    );
+
     ctx.body = {
       stored: {
-        apiUrl: stored.apiUrl ?? '',
-        model: stored.model ?? '',
-        apiKeyMasked: stored.apiKey ? maskApiKey(stored.apiKey) : '',
-        apiKeySet: Boolean(stored.apiKey),
+        provider: stored.provider ?? 'openai',
+        openai: {
+          apiUrl: stored.apiUrl ?? '',
+          model: stored.model ?? '',
+          apiKeySet: Boolean(stored.apiKey),
+          apiKeyLength: getSecretLength(stored.apiKey),
+        },
+        replicate: {
+          model: stored.replicateModel ?? '',
+          apiTokenSet: Boolean(stored.replicateApiToken),
+          apiTokenLength: getSecretLength(stored.replicateApiToken),
+        },
       },
       env: {
-        apiKeySet: Boolean(envApiKey),
-        apiUrlSet: Boolean(envApiUrl),
-        modelSet: Boolean(envModel),
+        providerSet: Boolean(envProvider),
+        openai: {
+          apiKeySet: Boolean(envApiKey),
+          apiUrlSet: Boolean(envApiUrl),
+          modelSet: Boolean(envModel),
+        },
+        replicate: {
+          apiTokenSet: Boolean(envReplicateApiToken),
+          modelSet: Boolean(envReplicateModel),
+        },
       },
       effective: {
-        apiUrl: effectiveApiUrl.value ?? '',
-        apiUrlSource: effectiveApiUrl.source,
-        model: effectiveModel.value ?? 'gpt-4o-mini',
-        modelSource: effectiveModel.source,
-        apiKeySet: Boolean(effectiveApiKey.value),
-        apiKeySource: effectiveApiKey.source,
+        provider: (effectiveProvider.value ?? 'openai') as AiTranslateProvider,
+        providerSource: effectiveProvider.source,
+        openai: {
+          apiUrl: effectiveApiUrl.value ?? '',
+          apiUrlSource: effectiveApiUrl.source,
+          model: effectiveModel.value ?? 'gpt-4o-mini',
+          modelSource: effectiveModel.source,
+          apiKeySet: Boolean(effectiveApiKey.value),
+          apiKeyLength: getSecretLength(effectiveApiKey.value),
+          apiKeySource: effectiveApiKey.source,
+        },
+        replicate: {
+          model: effectiveReplicateModel.value ?? '',
+          modelSource: effectiveReplicateModel.source,
+          apiTokenSet: Boolean(effectiveReplicateApiToken.value),
+          apiTokenLength: getSecretLength(effectiveReplicateApiToken.value),
+          apiTokenSource: effectiveReplicateApiToken.source,
+        },
       },
     };
   },
@@ -96,12 +148,18 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
       return;
     }
 
-    const current = (await strapi
-      .plugin('ai-translate')
-      .service('settings')
-      .getSettings()) as AiTranslateSettings;
+    const current = (await strapi.plugin('ai-translate').service('settings').getSettings()) as AiTranslateSettings;
 
     const next: AiTranslateSettings = { ...current };
+
+    if (hasOwn(body, 'provider')) {
+      const provider = normalizeProvider(body.provider);
+      if (!provider) {
+        ctx.throw(400, 'provider 必须是 openai 或 replicate');
+        return;
+      }
+      next.provider = provider;
+    }
 
     if (hasOwn(body, 'apiUrl')) {
       const normalized = normalizeString(body.apiUrl);
@@ -114,17 +172,35 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
     }
 
     if (hasOwn(body, 'apiKey')) {
-      // 允许显式清空：传入空字符串会被标准化为 undefined
       const normalized = normalizeString(body.apiKey);
       next.apiKey = normalized;
+    }
+
+    if (hasOwn(body, 'replicateModel')) {
+      const normalized = normalizeString(body.replicateModel);
+      next.replicateModel = normalized;
+    }
+
+    if (hasOwn(body, 'replicateApiToken')) {
+      const normalized = normalizeString(body.replicateApiToken);
+      next.replicateApiToken = normalized;
     }
 
     await strapi.plugin('ai-translate').service('settings').setSettings(next);
 
     ctx.body = {
-      apiUrl: next.apiUrl ?? '',
-      model: next.model ?? '',
-      apiKeySet: Boolean(next.apiKey),
+      provider: next.provider ?? 'openai',
+      openai: {
+        apiUrl: next.apiUrl ?? '',
+        model: next.model ?? '',
+        apiKeySet: Boolean(next.apiKey),
+        apiKeyLength: getSecretLength(next.apiKey),
+      },
+      replicate: {
+        model: next.replicateModel ?? '',
+        apiTokenSet: Boolean(next.replicateApiToken),
+        apiTokenLength: getSecretLength(next.replicateApiToken),
+      },
     };
   },
 });

@@ -11,11 +11,9 @@ import {
   type Schema,
 } from '../utils/segments';
 
-type PluginConfig = {
-  apiKey?: string;
-  apiUrl?: string;
-  model?: string;
-};
+import type { AiTranslateProvider, AiTranslateSettings } from './settings';
+
+type PluginConfig = AiTranslateSettings;
 
 type TranslateDocumentInput = {
   uid: string;
@@ -29,6 +27,23 @@ type TranslateDocumentInput = {
 type TranslateSegmentsResult = {
   translationsById: Record<string, string>;
 };
+
+type Prompts = {
+  systemPrompt: string;
+  userPrompt: string;
+};
+
+type ReplicateClient = {
+  run: (model: string, params: { input: Record<string, unknown> }) => Promise<unknown>;
+};
+
+function normalizeProvider(value: unknown): AiTranslateProvider | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  return trimmed === 'openai' || trimmed === 'replicate' ? trimmed : undefined;
+}
 
 function parseJsonFromModelOutput(raw: string): unknown {
   const text = raw.trim();
@@ -79,12 +94,16 @@ async function getPluginConfig(strapi: Core.Strapi): Promise<PluginConfig> {
   };
 }
 
+function getProvider(config: PluginConfig): AiTranslateProvider {
+  return normalizeProvider(process.env.AI_TRANSLATE_PROVIDER) ?? normalizeProvider(config.provider) ?? 'openai';
+}
+
 function createOpenAIClient(config: PluginConfig): OpenAI {
   const apiKey = process.env.AI_TRANSLATE_API_KEY || config.apiKey;
   const baseURL = process.env.AI_TRANSLATE_API_URL || config.apiUrl;
 
   if (!apiKey) {
-    throw new Error('AI_TRANSLATE_API_KEY 未配置，请在环境变量或插件配置中设置');
+    throw new Error('AI_TRANSLATE_API_KEY 未配置，请在环境变量或插件 Settings 中设置');
   }
 
   return new OpenAI({
@@ -93,8 +112,39 @@ function createOpenAIClient(config: PluginConfig): OpenAI {
   });
 }
 
-function getModelName(config: PluginConfig): string {
+function getOpenAIModelName(config: PluginConfig): string {
   return process.env.AI_TRANSLATE_MODEL || config.model || 'gpt-4o-mini';
+}
+
+async function createReplicateClient(config: PluginConfig): Promise<{ replicate: ReplicateClient; model: string }> {
+  const apiToken = process.env.AI_TRANSLATE_REPLICATE_API_TOKEN || config.replicateApiToken;
+  const model = process.env.AI_TRANSLATE_REPLICATE_MODEL || config.replicateModel;
+
+  if (!apiToken) {
+    throw new Error('AI_TRANSLATE_REPLICATE_API_TOKEN 未配置，请在环境变量或插件 Settings 中设置');
+  }
+
+  if (!model) {
+    throw new Error('AI_TRANSLATE_REPLICATE_MODEL 未配置，请在环境变量或插件 Settings 中设置');
+  }
+
+  let ReplicateConstructor: unknown;
+  try {
+    const mod = (await import('replicate')) as unknown as { default?: unknown };
+    ReplicateConstructor = mod.default ?? mod;
+  } catch {
+    throw new Error('未安装 replicate SDK：请先安装 `replicate`（pnpm add replicate）后重启');
+  }
+
+  if (typeof ReplicateConstructor !== 'function') {
+    throw new Error('replicate SDK 加载失败：构造器不可用');
+  }
+
+  const replicate = new (ReplicateConstructor as new (options: { auth: string }) => ReplicateClient)({
+    auth: apiToken,
+  });
+
+  return { replicate, model };
 }
 
 function chunkSegments(segments: Segment[], maxSegments: number, maxChars: number): Segment[][] {
@@ -124,14 +174,12 @@ function chunkSegments(segments: Segment[], maxSegments: number, maxChars: numbe
   return chunks;
 }
 
-async function translateSegmentsWithAI(params: {
-  openai: OpenAI;
-  model: string;
+function buildTranslationPrompts(params: {
   targetLocale: string;
   segments: Segment[];
   customPrompt?: string;
-}): Promise<TranslateSegmentsResult> {
-  const { openai, model, targetLocale, segments, customPrompt } = params;
+}): Prompts {
+  const { targetLocale, segments, customPrompt } = params;
 
   const input = {
     segments: segments.map((s) => ({
@@ -158,12 +206,22 @@ async function translateSegmentsWithAI(params: {
     .filter(Boolean)
     .join('\n');
 
+  return { systemPrompt, userPrompt };
+}
+
+async function translateSegmentsWithOpenAI(params: {
+  openai: OpenAI;
+  model: string;
+  prompts: Prompts;
+}): Promise<TranslateSegmentsResult> {
+  const { openai, model, prompts } = params;
+
   async function createCompletion(useResponseFormat: boolean) {
     return openai.chat.completions.create({
       model,
       messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
+        { role: 'system', content: prompts.systemPrompt },
+        { role: 'user', content: prompts.userPrompt },
       ],
       temperature: 0.2,
       ...(useResponseFormat ? { response_format: { type: 'json_object' } } : {}),
@@ -209,6 +267,72 @@ async function translateSegmentsWithAI(params: {
   return { translationsById };
 }
 
+function normalizeReplicateOutput(output: unknown): string {
+  if (typeof output === 'string') {
+    return output;
+  }
+
+  if (Array.isArray(output)) {
+    return output.map((part) => (typeof part === 'string' ? part : JSON.stringify(part))).join('');
+  }
+
+  if (isPlainObject(output)) {
+    const nested = output.output;
+    if (typeof nested === 'string') {
+      return nested;
+    }
+    if (Array.isArray(nested)) {
+      return nested.map((part) => (typeof part === 'string' ? part : JSON.stringify(part))).join('');
+    }
+  }
+
+  return JSON.stringify(output);
+}
+
+async function translateSegmentsWithReplicate(params: {
+  replicate: ReplicateClient;
+  model: string;
+  prompts: Prompts;
+}): Promise<TranslateSegmentsResult> {
+  const { replicate, model, prompts } = params;
+
+  const combinedPrompt = `${prompts.systemPrompt}\n\n${prompts.userPrompt}`;
+
+  const output = await replicate.run(model, {
+    input: {
+      prompt: combinedPrompt,
+      temperature: 0.2,
+    },
+  });
+
+  const content = normalizeReplicateOutput(output).trim();
+  const parsed = parseJsonFromModelOutput(content);
+
+  if (!isPlainObject(parsed)) {
+    throw new Error('AI 返回的内容不是 JSON 对象');
+  }
+
+  const parsedSegments = parsed.segments;
+  if (!Array.isArray(parsedSegments)) {
+    throw new Error('AI 返回的 JSON 缺少 segments 数组');
+  }
+
+  const translationsById: Record<string, string> = {};
+  for (const item of parsedSegments) {
+    if (!isPlainObject(item)) {
+      continue;
+    }
+    const id = item.id;
+    const text = item.text;
+    if (typeof id !== 'string' || typeof text !== 'string') {
+      continue;
+    }
+    translationsById[id] = text;
+  }
+
+  return { translationsById };
+}
+
 export default ({ strapi }: { strapi: Core.Strapi }) => ({
   async translateDocument(input: TranslateDocumentInput) {
     const { uid, documentId, sourceLocale, targetLocale, customPrompt, includeJson } = input;
@@ -222,8 +346,7 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
     }
 
     const pluginConfig = await getPluginConfig(strapi);
-    const openai = createOpenAIClient(pluginConfig);
-    const model = getModelName(pluginConfig);
+    const provider = getProvider(pluginConfig);
 
     const schema = strapi.contentType(uid) as Schema | undefined;
     if (!schema) {
@@ -254,17 +377,47 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
       return localizedData;
     }
 
-    const chunks = chunkSegments(segments, 50, 12000);
+    const chunks = chunkSegments(segments, 50, 5000);
     const translationsById: Record<string, string> = {};
 
+    if (provider === 'openai') {
+      const openai = createOpenAIClient(pluginConfig);
+      const model = getOpenAIModelName(pluginConfig);
+
+      for (const chunk of chunks) {
+        const prompts = buildTranslationPrompts({
+          targetLocale,
+          segments: chunk,
+          customPrompt,
+        });
+
+        const result = await translateSegmentsWithOpenAI({
+          openai,
+          model,
+          prompts,
+        });
+
+        Object.assign(translationsById, result.translationsById);
+      }
+
+      return applySegmentTranslations(localizedData, segments, translationsById);
+    }
+
+    const { replicate, model } = await createReplicateClient(pluginConfig);
+
     for (const chunk of chunks) {
-      const result = await translateSegmentsWithAI({
-        openai,
-        model,
+      const prompts = buildTranslationPrompts({
         targetLocale,
         segments: chunk,
         customPrompt,
       });
+
+      const result = await translateSegmentsWithReplicate({
+        replicate,
+        model,
+        prompts,
+      });
+
       Object.assign(translationsById, result.translationsById);
     }
 
