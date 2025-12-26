@@ -39,22 +39,75 @@ type ReplicateClient = {
   run: (model: string, params: { input: Record<string, unknown> }) => Promise<unknown>;
 };
 
-function buildPopulateQueryForSourceDocument(schema: Schema): Record<string, unknown> {
-  const attributes = schema.attributes ?? {};
-  const populate: Record<string, unknown> = {};
+function buildPopulateQueryForSourceDocument(
+  schema: Schema,
+  components: ComponentsDictionary
+): Record<string, unknown> {
+  const visitedComponents = new Set<string>();
 
-  for (const [key, attribute] of Object.entries(attributes)) {
-    if (attribute.type === 'component' || attribute.type === 'dynamiczone') {
-      populate[key] = { populate: '*' };
-      continue;
+  function buildPopulateForSchema(currentSchema: Schema): Record<string, unknown> {
+    const attributes = currentSchema.attributes ?? {};
+    const populate: Record<string, unknown> = {};
+
+    for (const [key, attribute] of Object.entries(attributes)) {
+      if (attribute.type === 'media' || attribute.type === 'relation') {
+        populate[key] = true;
+        continue;
+      }
+
+      if (attribute.type === 'component') {
+        const componentUid = attribute.component;
+        const componentSchema = components[componentUid];
+        if (!componentSchema) {
+          populate[key] = { populate: '*' };
+          continue;
+        }
+        if (visitedComponents.has(componentUid)) {
+          populate[key] = { populate: '*' };
+          continue;
+        }
+
+        visitedComponents.add(componentUid);
+        const nestedPopulate = buildPopulateForSchema(componentSchema);
+        visitedComponents.delete(componentUid);
+
+        populate[key] = {
+          populate: Object.keys(nestedPopulate).length > 0 ? nestedPopulate : '*',
+        };
+        continue;
+      }
+
+      if (attribute.type === 'dynamiczone') {
+        const on: Record<string, unknown> = {};
+
+        for (const componentUid of attribute.components) {
+          const componentSchema = components[componentUid];
+          if (!componentSchema) {
+            on[componentUid] = { populate: '*' };
+            continue;
+          }
+          if (visitedComponents.has(componentUid)) {
+            on[componentUid] = { populate: '*' };
+            continue;
+          }
+
+          visitedComponents.add(componentUid);
+          const nestedPopulate = buildPopulateForSchema(componentSchema);
+          visitedComponents.delete(componentUid);
+
+          on[componentUid] = {
+            populate: Object.keys(nestedPopulate).length > 0 ? nestedPopulate : '*',
+          };
+        }
+
+        populate[key] = { on };
+      }
     }
 
-    if (attribute.type === 'media' || attribute.type === 'relation') {
-      populate[key] = true;
-    }
+    return populate;
   }
 
-  return populate;
+  return buildPopulateForSchema(schema);
 }
 
 function normalizeProvider(value: unknown): AiTranslateProvider | undefined {
@@ -377,7 +430,8 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
       throw new Error(`内容类型未启用 i18n：${uid}`);
     }
 
-    const populate = buildPopulateQueryForSourceDocument(schema);
+    const components = strapi.components as ComponentsDictionary;
+    const populate = buildPopulateQueryForSourceDocument(schema, components);
 
     const sourceDocument = await strapi.documents(uid).findOne({
       documentId,
@@ -391,7 +445,6 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
 
     const localizedData = extractLocalizedTopLevelFields(schema, sourceDocument);
     const topLevelMediaFields = extractTopLevelMediaFields(schema, sourceDocument);
-    const components = strapi.components as ComponentsDictionary;
     const segments = collectTranslatableSegments(schema, components, localizedData, {
       includeJson: includeJson === true,
     });

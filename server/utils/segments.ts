@@ -97,13 +97,13 @@ export function extractLocalizedTopLevelFields(
   return result;
 }
 
-/**
- * 提取顶层 media 字段，用于“翻译并回填”时把图片等媒体资源从 source locale 复制到 target locale。
- *
- * 说明：
- * - media 字段通常不需要翻译，但用户希望在创建/翻译本地化版本时自动带过去，避免手动重新关联。
- * - 这里只处理顶层字段，因为管理端回填目前是按顶层字段调用 onChange(key, value)。
- */
+/*
+提取顶层 media 字段，用于“翻译并回填”时把图片等媒体资源从 source locale 复制到 target locale。
+
+说明：
+- media 字段通常不需要翻译，但用户希望在创建/翻译本地化版本时自动带过去，避免手动重新关联。
+- 这里只处理顶层字段，因为管理端回填目前是按顶层字段调用 onChange(key, value)。
+*/
 export function extractTopLevelMediaFields(
   schema: Schema,
   data: Record<string, unknown>
@@ -250,6 +250,45 @@ export function collectTranslatableSegments(
         });
         return;
       }
+      case 'media': {
+        function walkMediaItem(item: unknown, itemPath: Path) {
+          if (!isPlainObject(item)) {
+            return;
+          }
+
+          const alternativeText = item.alternativeText;
+          if (typeof alternativeText === 'string') {
+            pushSegment([...itemPath, 'alternativeText'], alternativeText);
+          }
+
+          const caption = item.caption;
+          if (typeof caption === 'string') {
+            pushSegment([...itemPath, 'caption'], caption);
+          }
+        }
+
+        if (Array.isArray(value)) {
+          value.forEach((item, index) => {
+            walkMediaItem(item, [...basePath, index]);
+          });
+          return;
+        }
+
+        if (isPlainObject(value) && 'data' in value) {
+          const nested = value.data;
+          if (Array.isArray(nested)) {
+            nested.forEach((item, index) => {
+              walkMediaItem(item, [...basePath, 'data', index]);
+            });
+            return;
+          }
+          walkMediaItem(nested, [...basePath, 'data']);
+          return;
+        }
+
+        walkMediaItem(value, basePath);
+        return;
+      }
       default:
         return;
     }
@@ -326,14 +365,14 @@ export function applySegmentTranslations<T extends Record<string, unknown>>(
   return result;
 }
 
-/**
- * 把组件实例的 id 从数据中移除。
- *
- * 场景：当 target locale 是新建/空内容时，如果把 source locale 的组件（含 id）直接回填到表单，
- * 保存时 Strapi 会报："Some of the provided components ... are not related to the entity"。
- *
- * 注意：只移除 component/dynamiczone 的组件实例 id，不会动 media/relation 的 id。
- */
+/*
+把组件实例的 id 从数据中移除。
+
+场景：当 target locale 是新建/空内容时，如果把 source locale 的组件（含 id）直接回填到表单，
+保存时 Strapi 会报："Some of the provided components ... are not related to the entity"。
+
+注意：只移除 component/dynamiczone 的组件实例 id，不会动 media/relation 的 id。
+*/
 export function stripComponentInstanceIds<T extends Record<string, unknown>>(
   schema: Schema,
   components: ComponentsDictionary,

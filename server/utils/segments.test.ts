@@ -65,7 +65,7 @@ test('extractTopLevelMediaFields 返回顶层 media 字段（不依赖 localized
   });
 });
 
-test('collectTranslatableSegments 支持组件/重复组件/blocks，并跳过 media 等非文本字段', () => {
+test('collectTranslatableSegments 支持组件/重复组件/blocks，并翻译 media 的 alternativeText/caption', () => {
   const schema: Schema = {
     pluginOptions: { i18n: { localized: true } },
     attributes: {
@@ -100,10 +100,14 @@ test('collectTranslatableSegments 支持组件/重复组件/blocks，并跳过 m
 
   const localizedData = {
     title: 'Hello',
-    seo: { metaTitle: 'Meta', metaDescription: 'Desc', shareImage: { id: 1 } },
+    seo: {
+      metaTitle: 'Meta',
+      metaDescription: 'Desc',
+      shareImage: { id: 1, alternativeText: 'Alt', caption: 'Cap', url: '/uploads/a.png' },
+    },
     features: [
-      { title: 'A', content: 'A1', icon: { id: 2 } },
-      { title: 'B', content: 'B1', icon: { id: 3 } },
+      { title: 'A', content: 'A1', icon: { id: 2, alternativeText: 'Icon alt 1', caption: 'Icon cap 1' } },
+      { title: 'B', content: 'B1', icon: { id: 3, alternativeText: 'Icon alt 2', caption: 'Icon cap 2' } },
     ],
     contentBlocks: [
       { type: 'paragraph', children: [{ text: 'Hello blocks' }] },
@@ -124,9 +128,13 @@ test('collectTranslatableSegments 支持组件/重复组件/blocks，并跳过 m
   assert.ok(paths.includes('contentBlocks.0.children.0.text'));
   assert.ok(paths.includes('contentBlocks.1.children.0.text'));
 
-  // media 字段不应进入 segments
-  assert.ok(!paths.some((p) => p.includes('shareImage')));
-  assert.ok(!paths.some((p) => p.includes('icon')));
+  // media 字段只翻译 alternativeText / caption
+  assert.ok(paths.includes('seo.shareImage.alternativeText'));
+  assert.ok(paths.includes('seo.shareImage.caption'));
+  assert.ok(paths.includes('features.0.icon.alternativeText'));
+  assert.ok(paths.includes('features.0.icon.caption'));
+  assert.ok(paths.includes('features.1.icon.alternativeText'));
+  assert.ok(paths.includes('features.1.icon.caption'));
 });
 
 test('collectTranslatableSegments 默认不翻译 json 字段，includeJson=true 时才翻译', () => {
