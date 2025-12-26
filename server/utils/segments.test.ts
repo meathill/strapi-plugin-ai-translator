@@ -5,6 +5,7 @@ import {
   applySegmentTranslations,
   collectTranslatableSegments,
   extractLocalizedTopLevelFields,
+  extractTopLevelMediaFields,
   stripComponentInstanceIds,
   type ComponentsDictionary,
   type Schema,
@@ -31,6 +32,36 @@ test('extractLocalizedTopLevelFields 只返回 localized=true 的顶层字段', 
   assert.deepEqual(extractLocalizedTopLevelFields(schema, data), {
     title: 'Hello',
     seo: { metaTitle: 'Hello', metaDescription: 'Desc', shareImage: { id: 1 } },
+  });
+});
+
+test('extractTopLevelMediaFields 返回顶层 media 字段（不依赖 localized=true）', () => {
+  const schema: Schema = {
+    pluginOptions: { i18n: { localized: true } },
+    attributes: {
+      title: { type: 'string', pluginOptions: { i18n: { localized: true } } },
+      cover: { type: 'media' },
+      gallery: { type: 'media', multiple: true, pluginOptions: { i18n: { localized: true } } },
+      seo: { type: 'component', component: 'shared.seo' },
+    },
+  };
+
+  const data = {
+    title: 'Hello',
+    cover: { id: 10, url: '/uploads/a.png' },
+    gallery: [
+      { id: 11, url: '/uploads/b.png' },
+      { id: 12, url: '/uploads/c.png' },
+    ],
+    seo: { metaTitle: 'Meta' },
+  };
+
+  assert.deepEqual(extractTopLevelMediaFields(schema, data), {
+    cover: { id: 10, url: '/uploads/a.png' },
+    gallery: [
+      { id: 11, url: '/uploads/b.png' },
+      { id: 12, url: '/uploads/c.png' },
+    ],
   });
 });
 
@@ -225,4 +256,3 @@ test('stripComponentInstanceIds 能移除组件实例 id，但保留 media/relat
     blocks: [{ __component: 'features.feature-item', title: 'Z', icon: { id: 77 } }],
   });
 });
-

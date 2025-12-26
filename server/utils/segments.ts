@@ -97,6 +97,33 @@ export function extractLocalizedTopLevelFields(
   return result;
 }
 
+/**
+ * 提取顶层 media 字段，用于“翻译并回填”时把图片等媒体资源从 source locale 复制到 target locale。
+ *
+ * 说明：
+ * - media 字段通常不需要翻译，但用户希望在创建/翻译本地化版本时自动带过去，避免手动重新关联。
+ * - 这里只处理顶层字段，因为管理端回填目前是按顶层字段调用 onChange(key, value)。
+ */
+export function extractTopLevelMediaFields(
+  schema: Schema,
+  data: Record<string, unknown>
+): Record<string, unknown> {
+  const attributes = schema.attributes ?? {};
+  const result: Record<string, unknown> = {};
+
+  for (const [key, attribute] of Object.entries(attributes)) {
+    if (attribute.type !== 'media') {
+      continue;
+    }
+    if (!(key in data)) {
+      continue;
+    }
+    result[key] = data[key];
+  }
+
+  return result;
+}
+
 export function collectTranslatableSegments(
   schema: Schema,
   components: ComponentsDictionary,

@@ -5,6 +5,7 @@ import {
   applySegmentTranslations,
   collectTranslatableSegments,
   extractLocalizedTopLevelFields,
+  extractTopLevelMediaFields,
   isPlainObject,
   stripComponentInstanceIds,
   type ComponentsDictionary,
@@ -37,6 +38,24 @@ type Prompts = {
 type ReplicateClient = {
   run: (model: string, params: { input: Record<string, unknown> }) => Promise<unknown>;
 };
+
+function buildPopulateQueryForSourceDocument(schema: Schema): Record<string, unknown> {
+  const attributes = schema.attributes ?? {};
+  const populate: Record<string, unknown> = {};
+
+  for (const [key, attribute] of Object.entries(attributes)) {
+    if (attribute.type === 'component' || attribute.type === 'dynamiczone') {
+      populate[key] = { populate: '*' };
+      continue;
+    }
+
+    if (attribute.type === 'media' || attribute.type === 'relation') {
+      populate[key] = true;
+    }
+  }
+
+  return populate;
+}
 
 function normalizeProvider(value: unknown): AiTranslateProvider | undefined {
   if (typeof value !== 'string') {
@@ -358,10 +377,12 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
       throw new Error(`内容类型未启用 i18n：${uid}`);
     }
 
+    const populate = buildPopulateQueryForSourceDocument(schema);
+
     const sourceDocument = await strapi.documents(uid).findOne({
       documentId,
       locale: sourceLocale,
-      populate: '*',
+      populate,
     });
 
     if (!isPlainObject(sourceDocument)) {
@@ -369,13 +390,17 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
     }
 
     const localizedData = extractLocalizedTopLevelFields(schema, sourceDocument);
+    const topLevelMediaFields = extractTopLevelMediaFields(schema, sourceDocument);
     const components = strapi.components as ComponentsDictionary;
     const segments = collectTranslatableSegments(schema, components, localizedData, {
       includeJson: includeJson === true,
     });
 
     if (segments.length === 0) {
-      return stripComponentInstanceIds(schema, components, localizedData);
+      return {
+        ...stripComponentInstanceIds(schema, components, localizedData),
+        ...topLevelMediaFields,
+      };
     }
 
     const chunks = chunkSegments(segments, 50, 5000);
@@ -402,7 +427,10 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
       }
 
       const translated = applySegmentTranslations(localizedData, segments, translationsById);
-      return stripComponentInstanceIds(schema, components, translated);
+      return {
+        ...stripComponentInstanceIds(schema, components, translated),
+        ...topLevelMediaFields,
+      };
     }
 
     const { replicate, model } = await createReplicateClient(pluginConfig);
@@ -424,6 +452,9 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
     }
 
     const translated = applySegmentTranslations(localizedData, segments, translationsById);
-    return stripComponentInstanceIds(schema, components, translated);
+    return {
+      ...stripComponentInstanceIds(schema, components, translated),
+      ...topLevelMediaFields,
+    };
   },
 });

@@ -105,6 +105,18 @@ function isValueEmpty(value: unknown): boolean {
   if (Array.isArray(value)) {
     return value.length === 0;
   }
+  if (isRecord(value)) {
+    const keys = Object.keys(value);
+    if (keys.length === 0) {
+      return true;
+    }
+    if (keys.length === 1 && keys[0] === 'id') {
+      return value.id === null || value.id === undefined;
+    }
+    if (keys.length === 1 && keys[0] === 'data') {
+      return value.data === null || value.data === undefined;
+    }
+  }
   return false;
 }
 

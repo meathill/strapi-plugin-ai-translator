@@ -7,6 +7,7 @@ Translate your Strapi i18n entries with AI — directly inside the Content Manag
 - **In-editor workflow**: translate from the entry edit view (right sidebar), no copy/paste.
 - **Safe by default**: fills the form only (does not auto-save). By default, it only fills empty fields.
 - **Structure-aware**: handles nested fields such as **components / repeatable components / Blocks**.
+- **Media friendly**: auto-copies top-level media fields (images/files) from the source locale to reduce re-linking.
 - **Long content friendly**: auto-batches translation requests (≈ **5000 chars per batch**).
 - **Multiple AI providers**:
   - **OpenAI-compatible** (Chat Completions)
