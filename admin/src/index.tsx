@@ -19,11 +19,7 @@ type ContentManagerPlugin = {
   apis?: {
     addEditViewSidePanel?: (panels: SidePanelComponent[]) => void;
   };
-  injectComponent?: (
-    view: string,
-    zone: string,
-    component: { name: string; Component: React.ComponentType }
-  ) => void;
+  injectComponent?: (view: string, zone: string, component: { name: string; Component: React.ComponentType }) => void;
 };
 
 type StrapiAdminApp = {
@@ -35,14 +31,9 @@ type StrapiAdminApp = {
       intlLabel: { id: string; defaultMessage: string };
       permissions: unknown[];
       Component: () => Promise<{ default: React.ComponentType }>;
-    }
+    },
   ) => void;
-  registerPlugin: (plugin: {
-    id: string;
-    initializer: React.ComponentType;
-    isReady: boolean;
-    name: string;
-  }) => void;
+  registerPlugin: (plugin: { id: string; initializer: React.ComponentType; isReady: boolean; name: string }) => void;
   getPlugin: (pluginId: string) => unknown;
   locales: string[];
 };
@@ -173,7 +164,7 @@ export default {
 
     // eslint-disable-next-line no-console
     console.warn(
-      `[${pluginId}] 无法注入到 Content Manager：未找到 addEditViewSidePanel/injectComponent（可在浏览器 localStorage 设置 ai-translate:debug=1 查看更多信息）`
+      `[${pluginId}] 无法注入到 Content Manager：未找到 addEditViewSidePanel/injectComponent（可在浏览器 localStorage 设置 ai-translate:debug=1 查看更多信息）`,
     );
   },
 
@@ -182,9 +173,7 @@ export default {
       return Promise.resolve([]);
     }
 
-    const locales = Array.isArray((app as StrapiAdminApp).locales)
-      ? (app as StrapiAdminApp).locales
-      : [];
+    const locales = Array.isArray((app as StrapiAdminApp).locales) ? (app as StrapiAdminApp).locales : [];
 
     const importedTrads = await Promise.all(
       locales
@@ -195,7 +184,7 @@ export default {
             data: prefixPluginTranslations(data, pluginId),
             locale,
           };
-        })
+        }),
     );
 
     return Promise.resolve(importedTrads);

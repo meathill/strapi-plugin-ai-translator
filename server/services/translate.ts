@@ -1,5 +1,6 @@
-import { Core } from '@strapi/strapi';
 import OpenAI from 'openai';
+
+import type { Core } from '@strapi/strapi';
 
 import {
   applySegmentTranslations,
@@ -13,6 +14,8 @@ import {
   type Schema,
 } from '../utils/segments';
 
+import { buildTranslationCacheHash, getCachedTranslations, setCachedTranslations } from '../utils/translation-cache';
+
 import type { AiTranslateProvider, AiTranslateSettings } from './settings';
 
 type PluginConfig = AiTranslateSettings;
@@ -24,6 +27,27 @@ type TranslateDocumentInput = {
   targetLocale: string;
   customPrompt?: string;
   includeJson?: boolean;
+};
+
+type TranslateDocumentProgressInput = TranslateDocumentInput & {
+  maxChunks?: number;
+};
+
+type TranslateDocumentProgressResult = {
+  data: Record<string, unknown>;
+  meta: {
+    done: boolean;
+    progress: {
+      totalSegments: number;
+      translatedSegments: number;
+      remainingSegments: number;
+      remainingChunks: number;
+    };
+    cache: {
+      hits: number;
+      writes: number;
+    };
+  };
 };
 
 type TranslateSegmentsResult = {
@@ -41,7 +65,7 @@ type ReplicateClient = {
 
 function buildPopulateQueryForSourceDocument(
   schema: Schema,
-  components: ComponentsDictionary
+  components: ComponentsDictionary,
 ): Record<string, unknown> {
   const visitedComponents = new Set<string>();
 
@@ -127,8 +151,7 @@ function parseJsonFromModelOutput(raw: string): unknown {
   try {
     return JSON.parse(text);
   } catch {
-    const fenced =
-      text.match(/```json\n([\s\S]*?)\n```/) ?? text.match(/```\n([\s\S]*?)\n```/);
+    const fenced = text.match(/```json\n([\s\S]*?)\n```/) ?? text.match(/```\n([\s\S]*?)\n```/);
     if (fenced?.[1]) {
       return JSON.parse(fenced[1]);
     }
@@ -157,9 +180,7 @@ function isUnsupportedResponseFormatError(error: unknown): boolean {
 
 async function getPluginConfig(strapi: Core.Strapi): Promise<PluginConfig> {
   const config = (strapi.config.get('plugin::ai-translate') as PluginConfig | undefined) ?? {};
-  const stored = (await strapi.plugin('ai-translate').service('settings').getSettings()) as
-    | PluginConfig
-    | undefined;
+  const stored = (await strapi.plugin('ai-translate').service('settings').getSettings()) as PluginConfig | undefined;
 
   return {
     ...config,
@@ -227,8 +248,7 @@ function chunkSegments(segments: Segment[], maxSegments: number, maxChars: numbe
 
   for (const segment of segments) {
     const length = segment.text.length;
-    const wouldOverflow =
-      current.length >= maxSegments || (current.length > 0 && currentChars + length > maxChars);
+    const wouldOverflow = current.length >= maxSegments || (current.length > 0 && currentChars + length > maxChars);
 
     if (wouldOverflow) {
       chunks.push(current);
@@ -245,6 +265,17 @@ function chunkSegments(segments: Segment[], maxSegments: number, maxChars: numbe
   }
 
   return chunks;
+}
+
+function normalizeMaxChunks(value: unknown, fallback: number): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return fallback;
+  }
+  const rounded = Math.floor(value);
+  if (rounded <= 0) {
+    return fallback;
+  }
+  return Math.min(rounded, 10);
 }
 
 function buildTranslationPrompts(params: {
@@ -271,11 +302,7 @@ function buildTranslationPrompts(params: {
     '返回格式：{"segments":[{"id":"0","text":"..."}]}',
   ].join('\n');
 
-  const userPrompt = [
-    customPrompt ? `额外要求：\n${customPrompt}\n` : '',
-    '需要翻译的内容：',
-    JSON.stringify(input),
-  ]
+  const userPrompt = [customPrompt ? `额外要求：\n${customPrompt}\n` : '', '需要翻译的内容：', JSON.stringify(input)]
     .filter(Boolean)
     .join('\n');
 
@@ -406,64 +433,131 @@ async function translateSegmentsWithReplicate(params: {
   return { translationsById };
 }
 
-export default ({ strapi }: { strapi: Core.Strapi }) => ({
-  async translateDocument(input: TranslateDocumentInput) {
-    const { uid, documentId, sourceLocale, targetLocale, customPrompt, includeJson } = input;
+async function translateDocumentProgressInternal(params: {
+  strapi: Core.Strapi;
+  input: TranslateDocumentInput;
+  maxChunksPerRequest: number;
+}): Promise<TranslateDocumentProgressResult> {
+  const { strapi, input, maxChunksPerRequest } = params;
+  const { uid, documentId, sourceLocale, targetLocale, customPrompt, includeJson } = input;
 
-    if (!uid || !documentId || !sourceLocale || !targetLocale) {
-      throw new Error('缺少参数：uid / documentId / sourceLocale / targetLocale');
-    }
+  if (!uid || !documentId || !sourceLocale || !targetLocale) {
+    throw new Error('缺少参数：uid / documentId / sourceLocale / targetLocale');
+  }
 
-    if (sourceLocale === targetLocale) {
-      throw new Error('sourceLocale 与 targetLocale 不能相同');
-    }
+  if (sourceLocale === targetLocale) {
+    throw new Error('sourceLocale 与 targetLocale 不能相同');
+  }
 
-    const pluginConfig = await getPluginConfig(strapi);
-    const provider = getProvider(pluginConfig);
+  const pluginConfig = await getPluginConfig(strapi);
+  const provider = getProvider(pluginConfig);
 
-    const schema = strapi.contentType(uid) as Schema | undefined;
-    if (!schema) {
-      throw new Error(`找不到内容类型：${uid}`);
-    }
+  const schema = strapi.contentType(uid) as Schema | undefined;
+  if (!schema) {
+    throw new Error(`找不到内容类型：${uid}`);
+  }
 
-    if (schema.pluginOptions?.i18n?.localized !== true) {
-      throw new Error(`内容类型未启用 i18n：${uid}`);
-    }
+  if (schema.pluginOptions?.i18n?.localized !== true) {
+    throw new Error(`内容类型未启用 i18n：${uid}`);
+  }
 
-    const components = strapi.components as ComponentsDictionary;
-    const populate = buildPopulateQueryForSourceDocument(schema, components);
+  const components = strapi.components as ComponentsDictionary;
+  const populate = buildPopulateQueryForSourceDocument(schema, components);
 
-    const sourceDocument = await strapi.documents(uid).findOne({
-      documentId,
-      locale: sourceLocale,
-      populate,
-    });
+  const sourceDocument = await strapi.documents(uid).findOne({
+    documentId,
+    locale: sourceLocale,
+    populate,
+  });
 
-    if (!isPlainObject(sourceDocument)) {
-      throw new Error('未找到源语言版本，或返回数据格式不正确');
-    }
+  if (!isPlainObject(sourceDocument)) {
+    throw new Error('未找到源语言版本，或返回数据格式不正确');
+  }
 
-    const localizedData = extractLocalizedTopLevelFields(schema, sourceDocument);
-    const topLevelMediaFields = extractTopLevelMediaFields(schema, sourceDocument);
-    const segments = collectTranslatableSegments(schema, components, localizedData, {
-      includeJson: includeJson === true,
-    });
+  const localizedData = extractLocalizedTopLevelFields(schema, sourceDocument);
+  const topLevelMediaFields = extractTopLevelMediaFields(schema, sourceDocument);
+  const segments = collectTranslatableSegments(schema, components, localizedData, {
+    includeJson: includeJson === true,
+  });
 
-    if (segments.length === 0) {
-      return {
+  if (segments.length === 0) {
+    return {
+      data: {
         ...stripComponentInstanceIds(schema, components, localizedData),
         ...topLevelMediaFields,
-      };
+      },
+      meta: {
+        done: true,
+        progress: {
+          totalSegments: 0,
+          translatedSegments: 0,
+          remainingSegments: 0,
+          remainingChunks: 0,
+        },
+        cache: {
+          hits: 0,
+          writes: 0,
+        },
+      },
+    };
+  }
+
+  const cacheModel =
+    provider === 'openai'
+      ? getOpenAIModelName(pluginConfig)
+      : process.env.AI_TRANSLATE_REPLICATE_MODEL || pluginConfig.replicateModel || '';
+
+  const cacheEndpoint = provider === 'openai' ? process.env.AI_TRANSLATE_API_URL || pluginConfig.apiUrl || '' : '';
+
+  const segmentCacheHashById = new Map<string, string>();
+  const allHashes: string[] = [];
+
+  for (const segment of segments) {
+    const hash = buildTranslationCacheHash({
+      provider,
+      model: cacheModel,
+      endpoint: cacheEndpoint,
+      sourceLocale,
+      targetLocale,
+      prompt: customPrompt,
+      text: segment.text,
+    });
+    segmentCacheHashById.set(segment.id, hash);
+    allHashes.push(hash);
+  }
+
+  const cachedByHash = await getCachedTranslations({ strapi, hashes: allHashes });
+
+  const translationsById: Record<string, string> = {};
+  let cacheHits = 0;
+  const pendingSegments: Segment[] = [];
+
+  for (const segment of segments) {
+    const hash = segmentCacheHashById.get(segment.id);
+    if (!hash) {
+      pendingSegments.push(segment);
+      continue;
     }
+    const cached = cachedByHash[hash];
+    if (typeof cached === 'string') {
+      translationsById[segment.id] = cached;
+      cacheHits += 1;
+    } else {
+      pendingSegments.push(segment);
+    }
+  }
 
-    const chunks = chunkSegments(segments, 50, 5000);
-    const translationsById: Record<string, string> = {};
+  const pendingChunks = chunkSegments(pendingSegments, 50, 5000);
+  const chunksToTranslate = pendingChunks.slice(0, maxChunksPerRequest);
+  let cacheWritesCount = 0;
 
+  if (chunksToTranslate.length > 0) {
     if (provider === 'openai') {
       const openai = createOpenAIClient(pluginConfig);
       const model = getOpenAIModelName(pluginConfig);
 
-      for (const chunk of chunks) {
+      for (const chunk of chunksToTranslate) {
+        const cacheWrites: Array<{ hash: string; translation: string }> = [];
         const prompts = buildTranslationPrompts({
           targetLocale,
           segments: chunk,
@@ -477,37 +571,96 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
         });
 
         Object.assign(translationsById, result.translationsById);
+
+        chunk.forEach((segment) => {
+          const translatedText = result.translationsById[segment.id];
+          const hash = segmentCacheHashById.get(segment.id);
+          if (typeof translatedText === 'string' && typeof hash === 'string') {
+            cacheWrites.push({ hash, translation: translatedText });
+          }
+        });
+
+        await setCachedTranslations({ strapi, entries: cacheWrites });
+        cacheWritesCount += cacheWrites.length;
       }
+    } else {
+      const { replicate, model } = await createReplicateClient(pluginConfig);
 
-      const translated = applySegmentTranslations(localizedData, segments, translationsById);
-      return {
-        ...stripComponentInstanceIds(schema, components, translated),
-        ...topLevelMediaFields,
-      };
+      for (const chunk of chunksToTranslate) {
+        const cacheWrites: Array<{ hash: string; translation: string }> = [];
+        const prompts = buildTranslationPrompts({
+          targetLocale,
+          segments: chunk,
+          customPrompt,
+        });
+
+        const result = await translateSegmentsWithReplicate({
+          replicate,
+          model,
+          prompts,
+        });
+
+        Object.assign(translationsById, result.translationsById);
+
+        chunk.forEach((segment) => {
+          const translatedText = result.translationsById[segment.id];
+          const hash = segmentCacheHashById.get(segment.id);
+          if (typeof translatedText === 'string' && typeof hash === 'string') {
+            cacheWrites.push({ hash, translation: translatedText });
+          }
+        });
+
+        await setCachedTranslations({ strapi, entries: cacheWrites });
+        cacheWritesCount += cacheWrites.length;
+      }
     }
+  }
 
-    const { replicate, model } = await createReplicateClient(pluginConfig);
+  const translatedSegmentsCount = segments.filter((segment) => typeof translationsById[segment.id] === 'string').length;
+  const remainingSegments = Math.max(0, segments.length - translatedSegmentsCount);
+  const remainingSegmentList = segments.filter((segment) => typeof translationsById[segment.id] !== 'string');
+  const remainingChunks = chunkSegments(remainingSegmentList, 50, 5000).length;
+  const done = remainingSegments === 0;
 
-    for (const chunk of chunks) {
-      const prompts = buildTranslationPrompts({
-        targetLocale,
-        segments: chunk,
-        customPrompt,
-      });
+  const translated = applySegmentTranslations(localizedData, segments, translationsById);
 
-      const result = await translateSegmentsWithReplicate({
-        replicate,
-        model,
-        prompts,
-      });
-
-      Object.assign(translationsById, result.translationsById);
-    }
-
-    const translated = applySegmentTranslations(localizedData, segments, translationsById);
-    return {
+  return {
+    data: {
       ...stripComponentInstanceIds(schema, components, translated),
       ...topLevelMediaFields,
-    };
+    },
+    meta: {
+      done,
+      progress: {
+        totalSegments: segments.length,
+        translatedSegments: translatedSegmentsCount,
+        remainingSegments,
+        remainingChunks,
+      },
+      cache: {
+        hits: cacheHits,
+        writes: cacheWritesCount,
+      },
+    },
+  };
+}
+
+export default ({ strapi }: { strapi: Core.Strapi }) => ({
+  async translateDocument(input: TranslateDocumentInput) {
+    const result = await translateDocumentProgressInternal({
+      strapi,
+      input,
+      maxChunksPerRequest: Number.MAX_SAFE_INTEGER,
+    });
+    return result.data;
+  },
+
+  async translateDocumentProgress(input: TranslateDocumentProgressInput): Promise<TranslateDocumentProgressResult> {
+    const maxChunksPerRequest = normalizeMaxChunks(input.maxChunks, 1);
+    return translateDocumentProgressInternal({
+      strapi,
+      input,
+      maxChunksPerRequest,
+    });
   },
 });

@@ -5,6 +5,7 @@ import {
   Box,
   Button,
   Field,
+  Modal,
   SingleSelect,
   SingleSelectOption,
   TextInput,
@@ -108,6 +109,8 @@ export default function SettingsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isCacheModalOpen, setIsCacheModalOpen] = useState(false);
+  const [isClearingCache, setIsClearingCache] = useState(false);
 
   const [settings, setSettings] = useState<SettingsResponseData | null>(null);
 
@@ -174,7 +177,7 @@ export default function SettingsPage() {
 
     return formatMessage(
       { id: getTrad('common.configuredLength'), defaultMessage: 'Configured (length: {length})' },
-      { length }
+      { length },
     );
   }
 
@@ -190,11 +193,10 @@ export default function SettingsPage() {
         formatMessage(
           {
             id: getTrad('settings.envOverride.provider'),
-            defaultMessage:
-              'Detected environment variable {name}. Provider saved in Settings page will be ignored.',
+            defaultMessage: 'Detected environment variable {name}. Provider saved in Settings page will be ignored.',
           },
-          { name: 'AI_TRANSLATE_PROVIDER' }
-        )
+          { name: 'AI_TRANSLATE_PROVIDER' },
+        ),
       );
     }
 
@@ -206,8 +208,8 @@ export default function SettingsPage() {
             defaultMessage:
               'Detected environment variable {name}. OpenAI API Key saved in Settings page will be ignored.',
           },
-          { name: 'AI_TRANSLATE_API_KEY' }
-        )
+          { name: 'AI_TRANSLATE_API_KEY' },
+        ),
       );
     }
     if (settings.env.openai.apiUrlSet) {
@@ -218,8 +220,8 @@ export default function SettingsPage() {
             defaultMessage:
               'Detected environment variable {name}. OpenAI API endpoint saved in Settings page will be ignored.',
           },
-          { name: 'AI_TRANSLATE_API_URL' }
-        )
+          { name: 'AI_TRANSLATE_API_URL' },
+        ),
       );
     }
     if (settings.env.openai.modelSet) {
@@ -230,8 +232,8 @@ export default function SettingsPage() {
             defaultMessage:
               'Detected environment variable {name}. OpenAI model saved in Settings page will be ignored.',
           },
-          { name: 'AI_TRANSLATE_MODEL' }
-        )
+          { name: 'AI_TRANSLATE_MODEL' },
+        ),
       );
     }
 
@@ -243,8 +245,8 @@ export default function SettingsPage() {
             defaultMessage:
               'Detected environment variable {name}. Replicate API Token saved in Settings page will be ignored.',
           },
-          { name: 'AI_TRANSLATE_REPLICATE_API_TOKEN' }
-        )
+          { name: 'AI_TRANSLATE_REPLICATE_API_TOKEN' },
+        ),
       );
     }
     if (settings.env.replicate.modelSet) {
@@ -255,8 +257,8 @@ export default function SettingsPage() {
             defaultMessage:
               'Detected environment variable {name}. Replicate model saved in Settings page will be ignored.',
           },
-          { name: 'AI_TRANSLATE_REPLICATE_MODEL' }
-        )
+          { name: 'AI_TRANSLATE_REPLICATE_MODEL' },
+        ),
       );
     }
 
@@ -277,7 +279,7 @@ export default function SettingsPage() {
             formatMessage({
               id: getTrad('settings.error.invalidResponse'),
               defaultMessage: 'Invalid response payload.',
-            })
+            }),
           );
         }
 
@@ -299,13 +301,13 @@ export default function SettingsPage() {
               : formatMessage({
                   id: getTrad('settings.error.loadFailed'),
                   defaultMessage: 'Failed to load settings.',
-                }))
+                })),
         );
       } finally {
         setIsLoading(false);
       }
     },
-    [fetchClient, formatMessage]
+    [fetchClient, formatMessage],
   );
 
   useEffect(() => {
@@ -359,7 +361,7 @@ export default function SettingsPage() {
               : formatMessage({
                   id: getTrad('settings.error.saveFailed'),
                   defaultMessage: 'Failed to save settings.',
-                }))
+                })),
         );
       } finally {
         setIsSaving(false);
@@ -376,7 +378,7 @@ export default function SettingsPage() {
       replicateApiToken,
       replicateModel,
       toggleNotification,
-    ]
+    ],
   );
 
   const handleClearOpenAiApiKey = useCallback(
@@ -411,13 +413,13 @@ export default function SettingsPage() {
               : formatMessage({
                   id: getTrad('settings.error.clearFailed'),
                   defaultMessage: 'Failed to clear API Key.',
-                }))
+                })),
         );
       } finally {
         setIsSaving(false);
       }
     },
-    [fetchClient, formatMessage, load, toggleNotification]
+    [fetchClient, formatMessage, load, toggleNotification],
   );
 
   const handleClearReplicateApiToken = useCallback(
@@ -452,13 +454,63 @@ export default function SettingsPage() {
               : formatMessage({
                   id: getTrad('settings.error.clearFailed'),
                   defaultMessage: 'Failed to clear API Token.',
-                }))
+                })),
         );
       } finally {
         setIsSaving(false);
       }
     },
-    [fetchClient, formatMessage, load, toggleNotification]
+    [fetchClient, formatMessage, load, toggleNotification],
+  );
+
+  const handleConfirmClearTranslationCache = useCallback(
+    async function handleConfirmClearTranslationCache() {
+      setIsClearingCache(true);
+      setError(null);
+
+      try {
+        const response = await fetchClient.post('/ai-translate/cache/clear', {
+          includePreviousVersions: true,
+        });
+
+        const data = response?.data as unknown;
+        const clearedBuckets =
+          isRecord(data) && typeof data.clearedBuckets === 'number' ? data.clearedBuckets : undefined;
+
+        toggleNotification({
+          type: 'success',
+          message: formatMessage(
+            {
+              id: getTrad('settings.cache.notification.cleared'),
+              defaultMessage: 'Translation cache cleared (buckets cleared: {buckets}).',
+            },
+            { buckets: typeof clearedBuckets === 'number' ? clearedBuckets : 0 },
+          ),
+        });
+
+        setIsCacheModalOpen(false);
+      } catch (err: unknown) {
+        toggleNotification({
+          type: 'danger',
+          message: formatMessage({
+            id: getTrad('settings.cache.notification.clearFailed'),
+            defaultMessage: 'Failed to clear translation cache.',
+          }),
+        });
+        setError(
+          getApiErrorMessage(err) ||
+            (err instanceof Error
+              ? err.message
+              : formatMessage({
+                  id: getTrad('settings.cache.error.clearFailed'),
+                  defaultMessage: 'Failed to clear translation cache.',
+                })),
+        );
+      } finally {
+        setIsClearingCache(false);
+      }
+    },
+    [fetchClient, formatMessage, toggleNotification],
   );
 
   if (isLoading) {
@@ -629,7 +681,7 @@ export default function SettingsPage() {
                     type="password"
                     placeholder={formatSecretPlaceholder(
                       settings?.stored.openai.apiKeySet === true,
-                      settings?.stored.openai.apiKeyLength ?? 0
+                      settings?.stored.openai.apiKeyLength ?? 0,
                     )}
                     value={openaiApiKey}
                     onChange={(e: React.ChangeEvent<HTMLInputElement>) => setOpenaiApiKey(e.target.value)}
@@ -685,8 +737,7 @@ export default function SettingsPage() {
                   <Field.Hint>
                     {formatMessage({
                       id: getTrad('settings.replicate.model.hint'),
-                      defaultMessage:
-                        'Enter Replicate model identifier (owner/name or owner/name:version).',
+                      defaultMessage: 'Enter Replicate model identifier (owner/name or owner/name:version).',
                     })}
                   </Field.Hint>
                 </Field.Root>
@@ -704,7 +755,7 @@ export default function SettingsPage() {
                     type="password"
                     placeholder={formatSecretPlaceholder(
                       settings?.stored.replicate.apiTokenSet === true,
-                      settings?.stored.replicate.apiTokenLength ?? 0
+                      settings?.stored.replicate.apiTokenLength ?? 0,
                     )}
                     value={replicateApiToken}
                     onChange={(e: React.ChangeEvent<HTMLInputElement>) => setReplicateApiToken(e.target.value)}
@@ -752,7 +803,7 @@ export default function SettingsPage() {
                   {
                     provider: formatProvider(settings.effective.provider),
                     source: formatSource(settings.effective.providerSource),
-                  }
+                  },
                 )}
               </Typography>
 
@@ -767,7 +818,7 @@ export default function SettingsPage() {
                       {
                         value: settings.effective.openai.apiUrl || defaultLabel,
                         source: formatSource(settings.effective.openai.apiUrlSource),
-                      }
+                      },
                     )}
                   </Typography>
                   <Typography variant="epsilon" textColor="neutral700">
@@ -779,7 +830,7 @@ export default function SettingsPage() {
                       {
                         value: settings.effective.openai.model,
                         source: formatSource(settings.effective.openai.modelSource),
-                      }
+                      },
                     )}
                   </Typography>
                   <Typography variant="epsilon" textColor="neutral700">
@@ -787,13 +838,12 @@ export default function SettingsPage() {
                       ? formatMessage(
                           {
                             id: getTrad('settings.effective.openai.apiKey.setLine'),
-                            defaultMessage:
-                              'OpenAI API Key: Configured (length: {length}, source: {source})',
+                            defaultMessage: 'OpenAI API Key: Configured (length: {length}, source: {source})',
                           },
                           {
                             length: settings.effective.openai.apiKeyLength,
                             source: formatSource(settings.effective.openai.apiKeySource),
-                          }
+                          },
                         )
                       : formatMessage({
                           id: getTrad('settings.effective.openai.apiKey.unsetLine'),
@@ -814,7 +864,7 @@ export default function SettingsPage() {
                       {
                         value: settings.effective.replicate.model || notConfiguredLabel,
                         source: formatSource(settings.effective.replicate.modelSource),
-                      }
+                      },
                     )}
                   </Typography>
                   <Typography variant="epsilon" textColor="neutral700">
@@ -822,13 +872,12 @@ export default function SettingsPage() {
                       ? formatMessage(
                           {
                             id: getTrad('settings.effective.replicate.apiToken.setLine'),
-                            defaultMessage:
-                              'Replicate API Token: Configured (length: {length}, source: {source})',
+                            defaultMessage: 'Replicate API Token: Configured (length: {length}, source: {source})',
                           },
                           {
                             length: settings.effective.replicate.apiTokenLength,
                             source: formatSource(settings.effective.replicate.apiTokenSource),
-                          }
+                          },
                         )
                       : formatMessage({
                           id: getTrad('settings.effective.replicate.apiToken.unsetLine'),
@@ -840,6 +889,40 @@ export default function SettingsPage() {
             </Box>
           </Box>
         )}
+
+        <Box paddingTop={6}>
+          <Box background="neutral0" padding={6} shadow="filterShadow" hasRadius>
+            <Box paddingBottom={2}>
+              <Typography variant="delta">
+                {formatMessage({
+                  id: getTrad('settings.cache.sectionTitle'),
+                  defaultMessage: 'Translation cache',
+                })}
+              </Typography>
+            </Box>
+
+            <Typography variant="epsilon" textColor="neutral700">
+              {formatMessage({
+                id: getTrad('settings.cache.description'),
+                defaultMessage:
+                  'This plugin persists translated segments in Strapi store (database) to enable stop/continue and reuse completed batches. If you want to remove the cached translations, clear the cache below.',
+              })}
+            </Typography>
+
+            <Box paddingTop={4}>
+              <Button
+                variant="danger-light"
+                onClick={() => setIsCacheModalOpen(true)}
+                disabled={isSaving || isClearingCache}
+              >
+                {formatMessage({
+                  id: getTrad('settings.cache.clearButton'),
+                  defaultMessage: 'Clear translation cache',
+                })}
+              </Button>
+            </Box>
+          </Box>
+        </Box>
 
         <Box paddingTop={6}>
           <Box background="neutral0" padding={6} shadow="filterShadow" hasRadius>
@@ -874,6 +957,41 @@ export default function SettingsPage() {
             </Box>
           </Box>
         </Box>
+
+        <Modal.Root open={isCacheModalOpen} onOpenChange={setIsCacheModalOpen}>
+          <Modal.Content>
+            <Modal.Header closeLabel={formatMessage({ id: getTrad('common.close'), defaultMessage: 'Close' })}>
+              <Modal.Title>
+                {formatMessage({
+                  id: getTrad('settings.cache.confirm.title'),
+                  defaultMessage: 'Clear translation cache?',
+                })}
+              </Modal.Title>
+            </Modal.Header>
+
+            <Modal.Body>
+              <Typography variant="epsilon" textColor="neutral700">
+                {formatMessage({
+                  id: getTrad('settings.cache.confirm.description'),
+                  defaultMessage:
+                    'This will delete cached translated segments stored in your database. It cannot be undone. You can still translate again afterwards.',
+                })}
+              </Typography>
+            </Modal.Body>
+
+            <Modal.Footer justifyContent="space-between" gap={2}>
+              <Button onClick={() => setIsCacheModalOpen(false)} variant="tertiary" disabled={isClearingCache}>
+                {formatMessage({ id: getTrad('common.cancel'), defaultMessage: 'Cancel' })}
+              </Button>
+              <Button onClick={handleConfirmClearTranslationCache} variant="danger" loading={isClearingCache}>
+                {formatMessage({
+                  id: getTrad('settings.cache.confirm.confirmButton'),
+                  defaultMessage: 'Clear cache',
+                })}
+              </Button>
+            </Modal.Footer>
+          </Modal.Content>
+        </Modal.Root>
       </Layouts.Content>
     </Page.Main>
   );

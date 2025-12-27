@@ -28,8 +28,24 @@ function createAdminRoutes() {
     },
     {
       method: 'POST',
+      path: '/cache/clear',
+      handler: 'settings.clearTranslationCache',
+      config: {
+        policies: [...ADMIN_POLICIES],
+      },
+    },
+    {
+      method: 'POST',
       path: '/translate-document',
       handler: 'translate.translateDocument',
+      config: {
+        policies: [...ADMIN_POLICIES],
+      },
+    },
+    {
+      method: 'POST',
+      path: '/translate-document-progress',
+      handler: 'translate.translateDocumentProgress',
       config: {
         policies: [...ADMIN_POLICIES],
       },

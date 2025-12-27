@@ -77,10 +77,7 @@ export function isAttributeLocalized(attribute: Attribute | undefined): boolean 
   return attribute?.pluginOptions?.i18n?.localized === true;
 }
 
-export function extractLocalizedTopLevelFields(
-  schema: Schema,
-  data: Record<string, unknown>
-): Record<string, unknown> {
+export function extractLocalizedTopLevelFields(schema: Schema, data: Record<string, unknown>): Record<string, unknown> {
   const attributes = schema.attributes ?? {};
   const result: Record<string, unknown> = {};
 
@@ -104,10 +101,7 @@ export function extractLocalizedTopLevelFields(
 - media 字段通常不需要翻译，但用户希望在创建/翻译本地化版本时自动带过去，避免手动重新关联。
 - 这里只处理顶层字段，因为管理端回填目前是按顶层字段调用 onChange(key, value)。
 */
-export function extractTopLevelMediaFields(
-  schema: Schema,
-  data: Record<string, unknown>
-): Record<string, unknown> {
+export function extractTopLevelMediaFields(schema: Schema, data: Record<string, unknown>): Record<string, unknown> {
   const attributes = schema.attributes ?? {};
   const result: Record<string, unknown> = {};
 
@@ -128,7 +122,7 @@ export function collectTranslatableSegments(
   schema: Schema,
   components: ComponentsDictionary,
   localizedData: Record<string, unknown>,
-  options: CollectOptions = {}
+  options: CollectOptions = {},
 ): Segment[] {
   const attributes = schema.attributes ?? {};
   const segments: Segment[] = [];
@@ -318,7 +312,7 @@ export function collectTranslatableSegments(
 export function applySegmentTranslations<T extends Record<string, unknown>>(
   localizedData: T,
   segments: Segment[],
-  translationsById: Record<string, string>
+  translationsById: Record<string, string>,
 ): T {
   const result = structuredClone(localizedData) as T;
 
@@ -376,7 +370,7 @@ export function applySegmentTranslations<T extends Record<string, unknown>>(
 export function stripComponentInstanceIds<T extends Record<string, unknown>>(
   schema: Schema,
   components: ComponentsDictionary,
-  localizedData: T
+  localizedData: T,
 ): T {
   const result = structuredClone(localizedData) as Record<string, unknown>;
   const attributes = schema.attributes ?? {};

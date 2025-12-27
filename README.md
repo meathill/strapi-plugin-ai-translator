@@ -8,7 +8,10 @@ Translate your Strapi i18n entries with AI — directly inside the Content Manag
 - **Safe by default**: fills the form only (does not auto-save). By default, it only fills empty fields.
 - **Structure-aware**: handles nested fields such as **components / repeatable components / Blocks**.
 - **Media friendly**: auto-copies media fields (images/files) from the source locale to reduce re-linking, and translates media **alt text / caption**.
-- **Long content friendly**: auto-batches translation requests (≈ **5000 chars per batch**).
+- **Resume-friendly (cache + stop + continue)**:
+  - It **auto-batches** translation requests (≈ **5000 chars per batch**) to reduce timeouts.
+  - Each finished batch is **persisted in cache** (Strapi store / database), so you can **stop anytime** and **continue later**.
+  - If a request fails in the middle, you won’t lose everything — rerun and it will reuse completed batches (saves both time and money).
 - **Multiple AI providers**:
   - **OpenAI-compatible** (Chat Completions)
   - **Replicate** (official SDK)
@@ -59,6 +62,18 @@ In Strapi Admin: **Settings → Global → AI Translate**
 4. In the right sidebar, open **AI Translate**
 5. Pick a **source locale**, optionally add instructions, then click **Translate & fill**
 6. Review the changes and click **Save**
+
+## Cache & resume (important)
+
+To make long translations reliable (and prepare for future features like image translation), this plugin uses a **persistent cache**:
+
+- **Where it is stored**: Strapi `store` (database).
+- **What is cached**: translated text segments (not API keys).
+- **Why it matters**: you can stop and continue, and it can reuse completed batches after errors.
+
+If your content is sensitive, please evaluate whether you’re comfortable with caching translated text in your database. See `DEPLOYMENT.md` for cleanup notes.
+
+You can clear the cache from **Settings → Global → AI Translate**.
 
 ## Support
 

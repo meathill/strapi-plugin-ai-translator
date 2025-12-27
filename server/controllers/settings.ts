@@ -1,6 +1,7 @@
 import { Core } from '@strapi/strapi';
 
 import type { AiTranslateProvider, AiTranslateSettings } from '../services/settings';
+import { clearTranslationCache } from '../utils/translation-cache';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -30,7 +31,7 @@ function resolveEffectiveValue(
   envValue: string | undefined,
   storedValue: string | undefined,
   configValue: string | undefined,
-  fallback: string | undefined
+  fallback: string | undefined,
 ): { value: string | undefined; source: 'env' | 'settings' | 'config' | 'default' } {
   if (envValue) {
     return { value: envValue, source: 'env' };
@@ -70,7 +71,7 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
       envProvider,
       stored.provider,
       normalizeProvider(config.provider),
-      'openai'
+      'openai',
     );
 
     const effectiveApiUrl = resolveEffectiveValue(envApiUrl, stored.apiUrl, config.apiUrl, undefined);
@@ -81,14 +82,14 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
       envReplicateModel,
       stored.replicateModel,
       config.replicateModel,
-      ''
+      '',
     );
 
     const effectiveReplicateApiToken = resolveEffectiveValue(
       envReplicateApiToken,
       stored.replicateApiToken,
       config.replicateApiToken,
-      undefined
+      undefined,
     );
 
     ctx.body = {
@@ -201,6 +202,22 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
         apiTokenSet: Boolean(next.replicateApiToken),
         apiTokenLength: getSecretLength(next.replicateApiToken),
       },
+    };
+  },
+
+  async clearTranslationCache(ctx) {
+    const body = ctx.request.body as unknown;
+    const includePreviousVersions =
+      isRecord(body) && typeof body.includePreviousVersions === 'boolean' ? body.includePreviousVersions : true;
+
+    const result = await clearTranslationCache({
+      strapi,
+      includePreviousVersions,
+    });
+
+    ctx.body = {
+      ok: true,
+      ...result,
     };
   },
 });

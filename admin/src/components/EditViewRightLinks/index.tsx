@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   unstable_useContentManagerContext as useContentManagerContext,
   useFetchClient,
@@ -33,8 +33,29 @@ type FormApi = {
   onChange: (eventOrPath: React.ChangeEvent<unknown> | string, value?: unknown) => void;
 };
 
+type TranslateProgressMeta = {
+  done: boolean;
+  progress: {
+    totalSegments: number;
+    translatedSegments: number;
+    remainingSegments: number;
+    remainingChunks: number;
+  };
+  cache: {
+    hits: number;
+    writes: number;
+  };
+};
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function getNumber(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  return undefined;
 }
 
 function getLocaleFromQuery(query: unknown, rawQuery: string): string | undefined {
@@ -130,6 +151,9 @@ export default function EditViewRightLinks() {
   const [isVisible, setIsVisible] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [progressMeta, setProgressMeta] = useState<TranslateProgressMeta | null>(null);
+  const cancelRequestedRef = useRef(false);
+  const [isCancelling, setIsCancelling] = useState(false);
 
   const [prompt, setPrompt] = useState('');
   const [sourceLocale, setSourceLocale] = useState('');
@@ -147,8 +171,7 @@ export default function EditViewRightLinks() {
 
   const queryLocale = getLocaleFromQuery(query, rawQuery) ?? '';
   const pluginLocalized = contentType?.pluginOptions?.i18n?.localized;
-  const isLocalized =
-    typeof pluginLocalized === 'boolean' ? pluginLocalized : Boolean(queryLocale);
+  const isLocalized = typeof pluginLocalized === 'boolean' ? pluginLocalized : Boolean(queryLocale);
 
   const defaultLocale = locales.find((l) => l.isDefault)?.code ?? '';
   const targetLocaleFromValues = typeof values.locale === 'string' ? values.locale : '';
@@ -159,14 +182,11 @@ export default function EditViewRightLinks() {
     if (matched) {
       return formatMessage(
         { id: getTrad('editView.localeLabel'), defaultMessage: '{name} ({code})' },
-        { name: matched.name, code: matched.code }
+        { name: matched.name, code: matched.code },
       );
     }
 
-    return (
-      targetLocale ||
-      formatMessage({ id: getTrad('common.unknown'), defaultMessage: 'Unknown' })
-    );
+    return targetLocale || formatMessage({ id: getTrad('common.unknown'), defaultMessage: 'Unknown' });
   }, [formatMessage, locales, targetLocale]);
 
   if (!isLocalized) {
@@ -218,7 +238,7 @@ export default function EditViewRightLinks() {
       label: item.isDefault
         ? formatMessage(
             { id: getTrad('editView.localeOptionDefault'), defaultMessage: '{name} (default)' },
-            { name: item.name }
+            { name: item.name },
           )
         : item.name,
       value: item.code,
@@ -269,7 +289,7 @@ export default function EditViewRightLinks() {
               : formatMessage({
                   id: getTrad('editView.error.loadLocalesFailed'),
                   defaultMessage: 'Failed to load locales.',
-                }))
+                })),
         );
       }
     }
@@ -277,9 +297,26 @@ export default function EditViewRightLinks() {
     loadLocales();
   }, [fetchClient, formatMessage, isVisible, sourceLocale, targetLocale]);
 
+  function handleOpenChange(nextOpen: boolean) {
+    if (!nextOpen && isLoading) {
+      cancelRequestedRef.current = true;
+      setIsCancelling(true);
+      return;
+    }
+    setIsVisible(nextOpen);
+  }
+
+  function requestCancel() {
+    cancelRequestedRef.current = true;
+    setIsCancelling(true);
+  }
+
   async function handleTranslate() {
     setIsLoading(true);
     setError(null);
+    setProgressMeta(null);
+    cancelRequestedRef.current = false;
+    setIsCancelling(false);
 
     try {
       if (!canTranslate) {
@@ -287,7 +324,7 @@ export default function EditViewRightLinks() {
           formatMessage({
             id: getTrad('editView.error.translateImpossible'),
             defaultMessage: 'Cannot translate: please save the entry and make sure the target locale is detected.',
-          })
+          }),
         );
       }
       if (!sourceLocale) {
@@ -295,39 +332,123 @@ export default function EditViewRightLinks() {
           formatMessage({
             id: getTrad('editView.error.sourceLocaleRequired'),
             defaultMessage: 'Please select a source locale.',
-          })
+          }),
         );
       }
 
-      const endpoint = '/ai-translate/translate-document';
+      const endpoint = '/ai-translate/translate-document-progress';
 
       if (isDebugEnabled()) {
         // eslint-disable-next-line no-console
         console.log('[ai-translate] 请求翻译接口：', endpoint);
       }
 
-      const response = await fetchClient.post(endpoint, {
-        uid,
-        documentId: inferredDocumentId,
-        sourceLocale,
-        targetLocale,
-        prompt,
-        includeJson,
-      });
+      let lastResultData: Record<string, unknown> | null = null;
+      let loopCount = 0;
+      let lastTranslatedSegments = -1;
 
-      const translated = response.data;
-      if (!isRecord(translated)) {
+      while (true) {
+        if (cancelRequestedRef.current) {
+          break;
+        }
+
+        const response = await fetchClient.post(endpoint, {
+          uid,
+          documentId: inferredDocumentId,
+          sourceLocale,
+          targetLocale,
+          prompt,
+          includeJson,
+          maxChunks: 1,
+        });
+
+        const payload = response.data;
+        if (!isRecord(payload)) {
+          throw new Error(
+            formatMessage({
+              id: getTrad('editView.error.translateResponseInvalid'),
+              defaultMessage: 'Translate API returned invalid data.',
+            }),
+          );
+        }
+
+        const translated = payload.data;
+        const meta = payload.meta;
+        if (!isRecord(translated) || !isRecord(meta)) {
+          throw new Error(
+            formatMessage({
+              id: getTrad('editView.error.translateResponseInvalid'),
+              defaultMessage: 'Translate API returned invalid data.',
+            }),
+          );
+        }
+
+        lastResultData = translated;
+
+        const done = meta.done === true;
+        const nextProgress = isRecord(meta.progress) ? meta.progress : {};
+        const nextCache = isRecord(meta.cache) ? meta.cache : {};
+        const totalSegments = getNumber(nextProgress.totalSegments) ?? 0;
+        const translatedSegments = getNumber(nextProgress.translatedSegments) ?? 0;
+        const remainingSegments = getNumber(nextProgress.remainingSegments) ?? 0;
+        const remainingChunks = getNumber(nextProgress.remainingChunks) ?? 0;
+        const hits = getNumber(nextCache.hits) ?? 0;
+        const writes = getNumber(nextCache.writes) ?? 0;
+
+        setProgressMeta({
+          done,
+          progress: {
+            totalSegments,
+            translatedSegments,
+            remainingSegments,
+            remainingChunks,
+          },
+          cache: {
+            hits,
+            writes,
+          },
+        });
+
+        if (done) {
+          break;
+        }
+
+        if (translatedSegments <= lastTranslatedSegments) {
+          loopCount += 1;
+        } else {
+          lastTranslatedSegments = translatedSegments;
+          loopCount = 0;
+        }
+
+        if (loopCount >= 5) {
+          throw new Error(
+            formatMessage({
+              id: getTrad('editView.error.translateStuck'),
+              defaultMessage:
+                'Translation seems stuck (no progress in multiple rounds). Please try again or check your AI endpoint settings.',
+            }),
+          );
+        }
+      }
+
+      if (cancelRequestedRef.current) {
+        return;
+      }
+
+      if (!lastResultData) {
         throw new Error(
           formatMessage({
             id: getTrad('editView.error.translateResponseInvalid'),
             defaultMessage: 'Translate API returned invalid data.',
-          })
+          }),
         );
       }
 
-      Object.keys(translated).forEach((key) => {
-        const nextValue = translated[key];
-        if (!overwrite && !isValueEmpty(values[key])) {
+      const latestValues = (formApi?.values ?? values) as Record<string, unknown>;
+
+      Object.keys(lastResultData).forEach((key) => {
+        const nextValue = lastResultData?.[key];
+        if (!overwrite && !isValueEmpty(latestValues[key])) {
           return;
         }
         onChange(key, nextValue);
@@ -342,10 +463,11 @@ export default function EditViewRightLinks() {
             : formatMessage({
                 id: getTrad('editView.error.translateFailed'),
                 defaultMessage: 'Translation failed.',
-              }))
+              })),
       );
     } finally {
       setIsLoading(false);
+      setIsCancelling(false);
     }
   }
 
@@ -356,22 +478,14 @@ export default function EditViewRightLinks() {
       </Typography>
 
       <Box paddingTop={2}>
-        <Button
-          variant="secondary"
-          startIcon={<Magic />}
-          onClick={() => setIsVisible(true)}
-          fullWidth
-          disabled={!uid}
-        >
+        <Button variant="secondary" startIcon={<Magic />} onClick={() => setIsVisible(true)} fullWidth disabled={!uid}>
           {formatMessage({ id: getTrad('editView.openButton'), defaultMessage: 'AI Translate' })}
         </Button>
       </Box>
 
-      <Modal.Root open={isVisible} onOpenChange={setIsVisible}>
+      <Modal.Root open={isVisible} onOpenChange={handleOpenChange}>
         <Modal.Content>
-          <Modal.Header
-            closeLabel={formatMessage({ id: getTrad('common.close'), defaultMessage: 'Close' })}
-          >
+          <Modal.Header closeLabel={formatMessage({ id: getTrad('common.close'), defaultMessage: 'Close' })}>
             <Modal.Title>
               {formatMessage({ id: getTrad('editView.modal.title'), defaultMessage: 'AI Translate' })}
             </Modal.Title>
@@ -385,7 +499,7 @@ export default function EditViewRightLinks() {
                     id: getTrad('editView.modal.targetLocale'),
                     defaultMessage: 'Target locale (currently editing): {label}',
                   },
-                  { label: targetLocaleLabel }
+                  { label: targetLocaleLabel },
                 )}
               </Typography>
               <Typography variant="epsilon" textColor="neutral600">
@@ -415,6 +529,50 @@ export default function EditViewRightLinks() {
               </Box>
             )}
 
+            {progressMeta && (
+              <Box paddingBottom={4}>
+                <Alert
+                  title={formatMessage({
+                    id: getTrad('editView.progress.title'),
+                    defaultMessage: 'Translation progress',
+                  })}
+                  variant={progressMeta.done ? 'success' : 'default'}
+                >
+                  <Typography variant="epsilon">
+                    {formatMessage(
+                      {
+                        id: getTrad('editView.progress.segments'),
+                        defaultMessage: 'Segments: {translated}/{total} (remaining: {remaining}, chunks: {chunks})',
+                      },
+                      {
+                        translated: progressMeta.progress.translatedSegments,
+                        total: progressMeta.progress.totalSegments,
+                        remaining: progressMeta.progress.remainingSegments,
+                        chunks: progressMeta.progress.remainingChunks,
+                      },
+                    )}
+                  </Typography>
+                  <Typography variant="epsilon" textColor="neutral600">
+                    {formatMessage(
+                      {
+                        id: getTrad('editView.progress.cache'),
+                        defaultMessage: 'Cache: {hits} hits, {writes} writes',
+                      },
+                      { hits: progressMeta.cache.hits, writes: progressMeta.cache.writes },
+                    )}
+                  </Typography>
+                  {isCancelling && (
+                    <Typography variant="epsilon" textColor="neutral600">
+                      {formatMessage({
+                        id: getTrad('editView.progress.cancelling'),
+                        defaultMessage: 'Cancelling…',
+                      })}
+                    </Typography>
+                  )}
+                </Alert>
+              </Box>
+            )}
+
             <Box paddingBottom={4}>
               <Field.Root name="sourceLocale">
                 <Field.Label>
@@ -427,7 +585,7 @@ export default function EditViewRightLinks() {
                     id: getTrad('editView.sourceLocale.placeholder'),
                     defaultMessage: 'Select a source locale',
                   })}
-                  disabled={localeOptions.length === 0}
+                  disabled={localeOptions.length === 0 || isLoading}
                 >
                   {localeOptions
                     .filter((option) => option.value !== targetLocale)
@@ -441,7 +599,11 @@ export default function EditViewRightLinks() {
             </Box>
 
             <Box paddingBottom={4}>
-              <Checkbox checked={overwrite} onCheckedChange={(checked) => setOverwrite(checked === true)}>
+              <Checkbox
+                checked={overwrite}
+                onCheckedChange={(checked) => setOverwrite(checked === true)}
+                disabled={isLoading}
+              >
                 {formatMessage({
                   id: getTrad('editView.overwrite.label'),
                   defaultMessage: 'Overwrite existing fields (default: only fill empty fields)',
@@ -450,7 +612,11 @@ export default function EditViewRightLinks() {
             </Box>
 
             <Box paddingBottom={4}>
-              <Checkbox checked={includeJson} onCheckedChange={(checked) => setIncludeJson(checked === true)}>
+              <Checkbox
+                checked={includeJson}
+                onCheckedChange={(checked) => setIncludeJson(checked === true)}
+                disabled={isLoading}
+              >
                 {formatMessage({
                   id: getTrad('editView.includeJson.label'),
                   defaultMessage: 'Include JSON fields (may translate config/code; use with caution)',
@@ -468,18 +634,29 @@ export default function EditViewRightLinks() {
               value={prompt}
               placeholder={formatMessage({
                 id: getTrad('editView.prompt.placeholder'),
-                defaultMessage:
-                  'e.g. Use a formal tone; keep technical terms in English; preserve Markdown…',
+                defaultMessage: 'e.g. Use a formal tone; keep technical terms in English; preserve Markdown…',
               })}
               rows={4}
+              disabled={isLoading}
             />
           </Modal.Body>
 
           <Modal.Footer justifyContent="space-between" gap={2}>
-            <Button onClick={() => setIsVisible(false)} variant="tertiary">
-              {formatMessage({ id: getTrad('common.cancel'), defaultMessage: 'Cancel' })}
+            <Button
+              onClick={() => {
+                if (isLoading) {
+                  requestCancel();
+                  return;
+                }
+                setIsVisible(false);
+              }}
+              variant="tertiary"
+            >
+              {isLoading
+                ? formatMessage({ id: getTrad('editView.button.stop'), defaultMessage: 'Stop' })
+                : formatMessage({ id: getTrad('common.cancel'), defaultMessage: 'Cancel' })}
             </Button>
-            <Button onClick={handleTranslate} loading={isLoading} disabled={!canTranslate}>
+            <Button onClick={handleTranslate} loading={isLoading} disabled={!canTranslate || isLoading}>
               {formatMessage({
                 id: getTrad('editView.button.translateAndFill'),
                 defaultMessage: 'Translate & fill',

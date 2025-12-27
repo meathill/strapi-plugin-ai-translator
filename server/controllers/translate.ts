@@ -12,7 +12,7 @@ function handleControllerError(ctx, error: unknown) {
     if (status === 404) {
       ctx.throw(
         502,
-        'AI 服务返回 404（Not Found）。这通常意味着你配置的 API 端点不支持 OpenAI-compatible 的 chat 接口（POST /v1/chat/completions）。请检查 Settings → Global → AI Translate 里的 API 端点，或你的代理/转发服务是否支持该接口。'
+        'AI 服务返回 404（Not Found）。这通常意味着你配置的 API 端点不支持 OpenAI-compatible 的 chat 接口（POST /v1/chat/completions）。请检查 Settings → Global → AI Translate 里的 API 端点，或你的代理/转发服务是否支持该接口。',
       );
       return;
     }
@@ -70,6 +70,44 @@ export default ({ strapi }: { strapi: Core.Strapi }) => ({
         customPrompt: prompt,
         includeJson,
       });
+
+      ctx.body = result;
+    } catch (error: unknown) {
+      handleControllerError(ctx, error);
+    }
+  },
+
+  translateDocumentProgress: async (ctx) => {
+    try {
+      const body = isRecord(ctx.request.body) ? (ctx.request.body as Record<string, unknown>) : {};
+
+      const uid = typeof body.uid === 'string' ? body.uid : '';
+      const documentId = typeof body.documentId === 'string' ? body.documentId : '';
+      const sourceLocale = typeof body.sourceLocale === 'string' ? body.sourceLocale : '';
+      const targetLocale = typeof body.targetLocale === 'string' ? body.targetLocale : '';
+      const prompt = typeof body.prompt === 'string' ? body.prompt : undefined;
+      const includeJson = body.includeJson === true;
+
+      const rawMaxChunks = body.maxChunks;
+      const maxChunks =
+        typeof rawMaxChunks === 'number'
+          ? rawMaxChunks
+          : typeof rawMaxChunks === 'string' && rawMaxChunks.trim().length > 0
+            ? Number(rawMaxChunks)
+            : undefined;
+
+      const result = await strapi
+        .plugin('ai-translate')
+        .service('translate')
+        .translateDocumentProgress({
+          uid,
+          documentId,
+          sourceLocale,
+          targetLocale,
+          customPrompt: prompt,
+          includeJson,
+          ...(typeof maxChunks === 'number' && Number.isFinite(maxChunks) ? { maxChunks } : {}),
+        });
 
       ctx.body = result;
     } catch (error: unknown) {
